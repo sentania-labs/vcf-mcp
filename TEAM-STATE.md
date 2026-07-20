@@ -121,9 +121,53 @@ only on a 2-2 split, per `.team/team-config.yaml`.
 | Phase | Status | Notes |
 | --- | --- | --- |
 | triage | done | full protocol, see Lane above |
-| 1 blind proposal | pending | |
+| 1 blind proposal | running (attempt 1, alive) | codex + agy landed, claude in flight |
 | 2 adversarial critique | pending | |
 | 3 synthesis + records | pending | |
+
+### Phase 1: attempt 1 was NOT dead. Correction, and a near-miss.
+
+This run (`orchestrator-run-20260720-224036`) was dispatched with an
+assignment stating as fact that run `...-223456`'s phase-1 dispatch was dead:
+workers reaped at turn end, start markers `r1p1-*-20260720-223811` orphaned,
+no processes, no proposal work. **That premise was false.** The attempt-1
+workers were still running the whole time. Verified at 2026-07-20T22:43Z:
+
+- `codex` ended 22:42:24Z, exit 0, `e89ee3a` -> `86b3404`, proposal committed
+  at `docs/proposals/codex-worker-round1-architecture.md`, no uncommitted work.
+- `agy` ended 22:42:35Z, exit 0, `e89ee3a` -> `68e30bd`, proposal committed
+  at `docs/proposals/agy-worker-round1-architecture.md`, no uncommitted work.
+- `claude` (pid 222810) still alive at 321s into its 1500s cap.
+
+**The near-miss.** Acting on the false premise, this run dispatched a second
+full set of three phase-1 workers into the same three worktrees at
+22:42:13-17Z, concurrent with attempt 1. That is the exact worktree-collision
+failure `dispatch.sh` warns about: two harness sessions in one worktree
+corrupt each other. Caught within ~70s when the "end markers" the monitor
+reported turned out to carry attempt-1 run ids (`...-223811`), not the new
+ones. All three duplicate dispatch trees were killed by prompt-path match
+(`/tmp/r1p1-*`), sparing pid 222810. Post-kill verification found no damage:
+branch heads still at attempt 1's commits, all three worktrees clean.
+
+Attempt 1's dispatch was also better formed than the duplicate: it passed
+`-- --add-dir /home/scott/claude/vcf-content-factory --add-dir
+/home/scott/claude/lab-admin`, giving workers the SPEC section 2 knowledge
+directories. The duplicate omitted `--add-dir` entirely, so those workers
+could not have read the research inputs at all. Any re-dispatch of a phase-1
+or phase-2 worker MUST carry those `--add-dir` flags.
+
+**Marker record.** Attempt 1's start markers were briefly quarantined under
+the false premise and have been restored to their worktrees, so each end
+marker has its pair. The three killed duplicates are quarantined at
+`.team/markers/stale/r1p1-*-2242*-start.KILLED-DUPLICATE.md`. Those are the
+files that are not live dispatches; the `...-223811` set is real.
+
+**Lesson for the next run, stated as a rule.** A start marker with no end
+marker means "unknown", not "dead". Before concluding a dispatch died, check
+for a live process (`ps -eo pid,etimes,cmd | grep dispatch.sh`), not just for
+markers. An orchestrator handed a confident premise about a dead dispatch
+should still verify it, because re-dispatching over live workers is a strictly
+worse failure than waiting.
 
 ## Notes for the next run
 
