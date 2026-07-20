@@ -1,0 +1,24 @@
+# Protected paths, vcf-ops-mcp.
+#
+# Single source of truth for which paths require a signed consensus
+# decision record (docs/decisions/NNN-*.md) before a PR touching them can
+# merge. Read by tools/consensus-check.py, enforced by
+# .github/workflows/consensus.yml. Format: one path per line; a trailing
+# '/' matches the directory recursively.
+
+# The design contract.
+docs/SPEC.md
+
+# The constitution and its generated twin (AGENTS.md is generated from
+# CLAUDE.md by tools/generate_agents_md.sh).
+CLAUDE.md
+AGENTS.md
+
+# Safety-critical server core once it exists: target registry, credential
+# store, action gating/plan-then-apply, audit log. A unilateral change
+# here can silently weaken the read-only default or the prod hard-block.
+src/vcf_ops_mcp/
+
+# The team framework surface.
+roles/
+.github/protected-paths.txt

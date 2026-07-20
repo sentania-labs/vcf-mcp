@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Runtime state that must never enter the repo (see CLAUDE.md invariants):
+# credential stores, key material, audit logs, minted API keys, session
+# tokens. These are volume-mounted at runtime; gitignored defensively.
+.secrets/
+*.keyfile
+credstore*
+audit.log*
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.env.*
+
+.DS_Store
