@@ -205,6 +205,37 @@ radius on both appliances and that is a principal decision, not a team one.
    `consensus-check.py` are deliberate synthetic fixtures and must **not** be
    "fixed".
 
+## End-of-run sweep, round 3 (mid-round, not end-of-round)
+
+Run at the close of this orchestrator run. The round is **not** closed, so the
+normal end-of-round expectation of zero branches does not apply yet. Every
+branch below is **retained on purpose** because the round is mid-flight, and
+this section is what makes that a deliberate state rather than an abandoned one.
+
+- **Open team PRs: zero.** Correct: no PR opens until the round branch is
+  integrated and green.
+- **Doer-prefixed branches on `origin`: zero.** Guard run, passed. `origin` has
+  `main` only, plus the 16 `artifacts/*` tags from round 1.
+- **Round branch on `origin`: absent, and that is correct.** `round/2-phase1-build`
+  is local-only until the PR opens, per the brief. Do not push it early.
+- **`TEAM-STATE.md` is on `main` (`73b87bf`), ahead of the round branch.** The
+  orchestrator has no feature branch, and the next run reads `main` first. This
+  means `main` and `round/2-phase1-build` now differ on this file: **merge
+  `main` into the round branch before opening the PR**, per the round-2 note
+  below.
+
+Local branches retained on purpose:
+
+| Branch | Why retained |
+| --- | --- |
+| `round/2-phase1-build` | the round's integration branch, mid-round |
+| `p1-proposals` | all six phase-1/2 artifacts, tagged `artifacts/r3-p1-proposals-critiques` |
+| `claude/p1-build`, `codex/p1-build` | proposal artifact heads cited by the eventual record |
+| `agy/phase1-proposal` | **agy's real proposal head** (`f136b2a`); it ignored the provisioned branch name |
+| `agy/p1-build` | **empty, unused.** The branch provisioned for agy that it did not use. Safe to delete; kept this run only so the next run sees why the name appears in the marker |
+| `claude/p1-critique`, `codex/p1-critique`, `agy/p1-critique` | critique artifact heads |
+| `codex/spec-alerts-read-only`, `agy/spec-review` | the SPEC fast-lane author and sign-off heads, already merged into the round branch at `0481ae7`; safe to delete once the round PR merges |
+
 ## Round 1 and round 2 history, below this line
 
 Everything from here down is the completed round-1 and round-2 record, kept for
