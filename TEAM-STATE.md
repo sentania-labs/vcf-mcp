@@ -5,16 +5,216 @@ update it before exiting. This is machinery, not a human changelog.
 
 ## Current assignment
 
-**Round:** 1 (the project's first round), continuation run
-**Orchestrator run:** `vom-r2-esc-20260721-171423` (escalation resolutions +
-external review findings + merge)
-**Prior runs this round:** `...-223456` (phase 1 dispatch), `...-224036`
-(duplicate-dispatch near-miss, corrected), `...-231633` (phases 2 and 3, PR)
-**Status:** **complete.** PR #1 merged as `76c3357`. All five of Scott's
-resolutions folded into the records, all three external Codex findings
-addressed, round and doer branches swept, `.review-passed` written. Two
-escalations remain open for Scott (items 5 and 6 below); neither blocks the
-Phase 1 build round.
+**Round:** 3, the Phase 1 build (first real code round)
+**Orchestrator run:** `vom-p1-20260721-194336`
+**Status:** **in progress, stopped cleanly at the phase-2 boundary.** The SPEC
+correction is landed. Phases 1 and 2 are complete and verified. **Phase 3
+(ballots + synthesis) is where the next run starts.** No code has been written
+yet, by design: this round's phases 1 and 2 produced proposals and critiques
+only.
+
+**One new escalation for Scott, and it blocks Gate 1. See "Escalations".**
+
+Round 1 and round 2 are complete and their history is preserved further down
+this file, from "Continuation scope, given by Scott" onward. Read the round-3
+sections first; the older sections are context, not current state.
+
+### Round mechanics for round 3
+
+- **Round branch:** `round/2-phase1-build`. **LOCAL ONLY**, per the brief. Not
+  pushed. No PR open yet.
+- **Artifact branch:** `p1-proposals`, holding all three proposals and all
+  three critiques, tagged `artifacts/r3-p1-proposals-critiques` so nothing is
+  orphaned before the eventual squash merge.
+- **Worktrees:** reused at
+  `/home/scott/foundry/projects/.worktrees/vcf-ops-mcp-r1-<doer>` (the `r1` in
+  the path is now just a stale name, the worktrees are generic).
+- **Lane: full protocol.** Decomposition and design across the protected path
+  `src/vcf_ops_mcp/`, with several genuinely open forks. Not fast-lane
+  eligible. The SPEC amendment inside it was triaged separately as fast lane.
+
+### Phase log, round 3
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| triage | done | full protocol; SPEC amendment split off as fast lane |
+| SPEC amendment (fast lane) | **done** | record 008, codex authored, agy signed off, integrated |
+| 1 blind proposal | **done** | three proposals, blindness verified by history walk |
+| 2 adversarial critique | **done** | genuinely adversarial, real concessions |
+| 3 ballots + synthesis | **not started** | **next run starts here** |
+| implementation | not started | |
+
+### Artifact SHAs, round 3
+
+| Doer | Proposal | Critique |
+| --- | --- | --- |
+| claude-worker | `bfc23827ee5fa47e169a7c0059414c2688d25060` | `48b68d0746779955358953103e6838c56f5ae174` |
+| codex-worker | `ae239552ae857294c01adcb4901fc943614ebb20` | `63b3f4b1d818147caa555f87fe3d61d88ae870fd` |
+| agy-worker | `f136b2aa3a13f3f0637e4d5215b37e18df35fbe8` | `4fd8004bb909eb841a1d4e57bcae5bb0c884e366` |
+
+All six are reachable from `p1-proposals` and from the tag
+`artifacts/r3-p1-proposals-critiques`. **Tag before deleting any branch**, per
+the round-1 lesson below.
+
+Proposal artifacts: `docs/proposals/p1-build-claude.md`,
+`codex-worker-phase1-build.md`, `agy-worker-phase1-build.md`.
+Critiques: `p2-critique-claude.md`, `codex-worker-phase2-critique.md`,
+`agy-worker-phase1-critique.md`.
+
+## What round 3 has established so far
+
+These are inputs to the synthesis the next run owns, not decisions. Nothing
+below has been balloted.
+
+### Measured, three-way independent convergence: the auth header
+
+The assignment said `Authorization: OpsToken`; the delivered credentials file's
+own comment said `vRealizeOpsToken`. All three doers measured DEVEL
+independently and converged: **both forms return 200, and `OpsToken` is the
+canonical 9.x form.** An arbitrary scheme is rejected, so this is a real
+allow-list of two and not an unauthenticated endpoint. Record 006 already
+selects `OpsToken`.
+
+agy-worker reasoned toward `vRealizeOpsToken` for consistency with
+vcf-content-factory's reference `client.py`. That narrow question is still
+live for the synthesis; the underlying fact is not.
+
+The discrepancy was put to the workers as a thing to **measure rather than
+resolve by picking the more authoritative-looking source**, explicitly because
+round 2 nearly shipped on API operations that do not exist. It worked.
+
+### Measured: VCF Ops read queries are POST, which breaks verb-based gating
+
+claude-worker measured that three of the four core read families (resource
+query, stats, alerts) are **HTTP POST**, not GET.
+
+This matters because two proposals independently put the read-only choke point
+in the HTTP client as "refuse any method except GET". That predicate is
+**factually unbuildable against this API**: it would hard-block exactly the
+read traffic Phase 1 exists to serve.
+
+Both authors conceded in the critique round. agy-worker's concession, verbatim,
+is worth keeping because it is a clean reversal on measurement:
+
+> I was wrong about verb-based read-only enforcement: In my own proposal, I
+> proposed restricting the client to `GET` only if the posture is read-only.
+> Claude's measured finding that VCF read queries require `POST` completely
+> invalidates my approach. A verb-based gate is unbuildable. I concede to
+> Claude's capability-registry approach for read-only enforcement.
+
+The emerging (unballoted) alternative is a **capability registry** checked in
+the dispatcher: tools declare a capability, posture is checked against a
+`MUTATING` capability set that is empty in Phase 1. The synthesis should test
+whether that is genuinely structural or merely conventional.
+
+### Converging, unballoted: decomposition
+
+agy-worker and (per its critique) claude-worker both moved toward
+codex-worker's `contracts.py` interface spine, on the argument that defining
+`ToolContext` and repository protocols first lets three doers build in parallel
+instead of serializing behind a central `dispatch.py`. Two independent moves
+toward a third worker's design is a strong signal, but it is still a signal and
+not a verdict. **Ballot it.**
+
+### Live, genuinely contested going into synthesis
+
+1. **Audit-write failure semantics.** The constitution says no tool path ships
+   without its audit write. claude-worker would refuse to boot on an unwritable
+   audit volume. agy-worker argues that takes the admin UI down with it, and
+   the admin UI is what an operator needs to diagnose the failure and read the
+   audit log. Its position: block tool execution, do not block process startup.
+   This is the sharpest disagreement in the round and it is a real one.
+2. **Audit storage.** NDJSON append-only, host-rotated, versus codex-worker's
+   SQLite with monthly archive rotation. agy-worker attacked the SQLite backup
+   path for locking contention on the hot path of every tool call.
+3. **Fixture scrubbing.** Every proposal that captures live fixtures has a
+   scrubbing problem, and a scrubber that is 99 percent right is a scrubber
+   that leaks. Whitelist versus blacklist, and fixture staleness, are both open.
+4. **Token single-flight retry bound.** agy-worker found a possible unbounded
+   retry when a freshly acquired token also 401s (credentials revoked
+   mid-session). Whether the generation-counter designs actually bound the
+   retry per request is unresolved.
+
+## Escalations to Scott, current
+
+### NEW and blocking Gate 1: the DEVEL service account sees only 4 objects
+
+**Found by claude-worker during phase-1 recon; independently verified by the
+orchestrator before recording it here.**
+
+The delivered read-only `vcf-ops-mcp` account authenticates fine against DEVEL
+and can enumerate **21 adapter kinds**, but
+`GET /suite-api/api/resources` returns `totalCount: 4`. Its role scope is
+restricted to a small object set rather than all objects.
+
+Why this is Scott's call and not the team's: **Gate 1 is defined as Scott
+connecting Claude Code with a minted read-only key and running read queries
+against DEVEL.** Against a 4-object inventory that gate passes while
+demonstrating almost nothing, and it fails in a way that looks like a bug in
+this server rather than a permissions scope in the appliance. The team can
+build the whole of Phase 1 without this being fixed; the gate is what breaks.
+
+The remedy is a lab-admin change to widen the account's role scope (the
+critique names `allowAllObjects`). **The orchestrator did not file that request
+itself**, because widening a lab service account's visibility changes its blast
+radius on both appliances and that is a principal decision, not a team one.
+
+**Does not block starting the build. Does block Gate 1 being meaningful.**
+
+### Closed 2026-07-21 by this run
+
+- **Escalation 6, `docs/SPEC.md` 4.1 contract error: CLOSED.** Scott ruled
+  option 3, drop the alert mutation requirement; alerts are read-only in the
+  MVP. Recorded as `docs/decisions/008-alerts-read-only-in-mvp.md`, a
+  **directive-authority** record (no worker sign-offs, per
+  `docs/decisions/README.md`, because the team deliberately escalated the
+  remedy rather than proposing it). SPEC amended by codex-worker at `a222120`,
+  peer-reviewed and signed off by agy-worker at `148d80c`, integrated at
+  `0481ae7` without rebase so the signed SHA is preserved.
+- **Escalation 5, DEVEL read-only service account: CLOSED, it landed.**
+  Verified present at `.secrets/vrops-credentials.txt` (mode 0600, gitignored),
+  created 2026-07-20 by lab-admin under cross-workspace request `2686d705`,
+  role `ReadOnly` on both DEVEL and PROD. Superseded in practice by the new
+  escalation above: the account exists and authenticates, but its object scope
+  is too narrow for Gate 1.
+
+## Next run starts here
+
+1. **Phase 3: ballots and synthesis.** Read the three proposals and three
+   critiques on `p1-proposals`. The four contested questions are listed under
+   "Live, genuinely contested" above. Collect **four ballots** on each (yours
+   plus all three doers). Per `.team/team-config.yaml`, cursor is
+   **tiebreaker-only**: invoke it only on a 2-2 split. Record every losing
+   objection verbatim.
+2. **Write the decision record** as `009-*.md`. 008 is taken by this run.
+   Cite the six artifact SHAs from the table above. Protected path
+   `src/vcf_ops_mcp/` is in scope, so it needs sign-offs from all three doers.
+3. **Then dispatch implementation** by capability. Record 007 carries a
+   prospective division of labor, and this round's proposals carry fresh
+   division-of-labor claims that partly contradict it (agy-worker claims the
+   store and hands the client concurrency to codex-worker). Prefer the fresh
+   claims; they were made against the concrete work.
+4. **Put the 4-object escalation in front of Scott** before Gate 1 is
+   scheduled.
+5. **Non-blocking sweep items:** `tools/consensus-check.py:516` still cites
+   `001-town-motion.md`, a template leftover, prose only. And codex-worker
+   reported a duplicated `logs via VCF Ops).` line in `docs/SPEC.md` section 5
+   that it deliberately left alone because record 008 did not authorize that
+   correction. That was the right call; it needs its own authorization.
+   The `src/core/` and `ARCHITECTURE.md` strings elsewhere in
+   `consensus-check.py` are deliberate synthetic fixtures and must **not** be
+   "fixed".
+
+## Round 1 and round 2 history, below this line
+
+Everything from here down is the completed round-1 and round-2 record, kept for
+context. It is not current state.
+
+### Round 1 status, as closed
+
+PR #1 merged as `76c3357`. All five of Scott's resolutions folded into the
+records, all three external Codex findings addressed, round and doer branches
+swept, `.review-passed` written.
 
 ### Continuation scope, given by Scott 2026-07-21
 
@@ -334,6 +534,65 @@ Run at the close of this round, results recorded rather than assumed.
    fixtures and must **not** be "fixed".
 
 ## Notes for the next run
+
+### From the round-3 phase-1/2 run
+
+- **Give workers the credentials path as an absolute path, and `--add-dir` it.**
+  `.secrets/` is gitignored, so it does **not** exist in any worktree. A worker
+  told to read `.secrets/vrops-credentials.txt` relative to its worktree finds
+  nothing. Dispatch with
+  `--add-dir /home/scott/foundry/projects/vcf-ops-mcp/.secrets` and give the
+  absolute path in the prompt. All three doers then did live recon fine.
+- **Extra adapter args go after a bare `--`.** `dispatch.sh` consumes its own
+  flags and passes everything after `--` to the adapter, so the invocation is
+  `"$D" claude <wt> <brief> <prompt> --cap-seconds N --label X -- --add-dir A
+  --add-dir B`. Without the `--` the add-dirs are silently not passed.
+- **The role-brief argument must be an absolute path.** `roles/codex-worker.md`
+  relative to the project fails with "role-brief file not found"; the briefs
+  live in `$TEAM_FRAMEWORK_DIR/roles/`. This cost one failed dispatch.
+- **agy-worker does not reliably use the branch you check out for it.** On its
+  proposal dispatch it created `agy/phase1-proposal` instead of using the
+  provisioned `agy/p1-build`, and committed to the repo **root** rather than
+  `docs/proposals/`. The work was real and complete, just misfiled: the end
+  marker said `branch_changed: yes` while `git log round..agy/p1-build` was
+  empty, which reads exactly like a dead dispatch and is not one. **Check
+  `git branch --show-current` in the worktree and search for the commit before
+  concluding anything was lost.** Telling it explicitly to use the checked-out
+  branch fixed it on the critique dispatch.
+- **agy-worker's trailer said `Antigravity <agy@team.local>`,** not
+  `agy-worker`. The constitution requires the trailer name the resident. Worth
+  stating the exact expected string in the dispatch prompt.
+- **codex-worker wrote literal `\n` escapes into a commit message,** collapsing
+  it to one physical line so the `Co-authored-by:` trailer was mid-line and git
+  would not parse it as a trailer. It would have vanished at squash merge, which
+  is the exact thing the trailer rule exists to prevent. Caught by
+  `git log -1 --format='%(trailers:key=Co-authored-by)'`. **Run that check on
+  every doer commit before integrating**, and put it in the prompt as a
+  self-check.
+- **Verify a load-bearing worker claim yourself, again.** claude-worker reported
+  the service account sees only 4 objects. That drives an escalation, so the
+  orchestrator measured it directly against DEVEL rather than relaying it:
+  confirmed, `totalCount: 4` with 21 adapter kinds visible. This is the second
+  round running where independently verifying one factual claim changed what
+  got recorded.
+- **Framing a discrepancy as "measure this, do not resolve it by authority"
+  works.** The prompt named the `OpsToken` / `vRealizeOpsToken` conflict, said
+  explicitly not to pick the more authoritative-looking source, and cited last
+  round's near-miss as the reason. All three measured it and converged. Reuse
+  this framing whenever two inputs disagree on a fact.
+- **Naming the specific things to attack produced a real critique round.** The
+  critique prompt listed six named targets and said plainly that a "looks good"
+  round is a failed round that gets sent back. Result: every doer conceded at
+  least one point, and two reversed positions from their own proposals on
+  measurement. Compare a generic "critique the peers", which historically
+  produces politeness.
+- **Do not `git checkout <branch> -- TEAM-STATE.md` with uncommitted edits in
+  the working tree.** This run lost a fully written state file that way and had
+  to rewrite it from context. Commit the state file on the branch you edited it
+  on, then merge; never restore it from another ref to "sync" it.
+- **Dispatch wall clock this round:** SPEC edit 59s, trailer fix 68s, sign-off
+  60s, three parallel proposals 580s (claude was slowest, agy 122s), three
+  parallel critiques 476s. Caps of 1500s and 1200s were never approached.
 
 ### From the round-2 continuation run
 
