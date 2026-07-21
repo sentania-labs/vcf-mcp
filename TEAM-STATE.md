@@ -10,8 +10,11 @@ update it before exiting. This is machinery, not a human changelog.
 external review findings + merge)
 **Prior runs this round:** `...-223456` (phase 1 dispatch), `...-224036`
 (duplicate-dispatch near-miss, corrected), `...-231633` (phases 2 and 3, PR)
-**Status:** in flight, addressing Scott's five resolutions and the three
-external Codex findings on PR #1, then merging
+**Status:** **complete.** PR #1 merged as `76c3357`. All five of Scott's
+resolutions folded into the records, all three external Codex findings
+addressed, round and doer branches swept, `.review-passed` written. Two
+escalations remain open for Scott (items 5 and 6 below); neither blocks the
+Phase 1 build round.
 
 ### Continuation scope, given by Scott 2026-07-21
 
@@ -128,7 +131,8 @@ fast-lane item was triaged separately mid-round (see "Fast-lane fix" below).
 | 3 ballots + synthesis | **done** | two questions, four ballots each, both 4-0 |
 | records | **done** | 001-006 committed, signed by all three doers |
 | integration | **done** | all doer branches merged into `round/1-architecture` |
-| PR | **open** | PR #1, external Codex review received and addressed |
+| PR | **merged** | PR #1 squashed to `76c3357`; external review received and addressed |
+| sweep | **done** | round branch and all 14 doer branches deleted; artifacts tagged first, see below |
 | external review | **done** | 3 findings, all addressed this run, one review round per convention |
 | r2 protocol round | **done** | findings 1+2 ran the full protocol; see below |
 
@@ -161,6 +165,39 @@ for the same reason.
 
 Peer review assignment rotated so no resident reviewed its own work:
 claude reviewed codex, codex reviewed agy, agy reviewed claude.
+
+### Artifact commits are preserved by tags, and this is load-bearing
+
+**The squash merge broke every SHA citation in the records, and tags are the
+fix. Do this on every future round.**
+
+`docs/decisions/README.md` says a proposal is cited by full 40-character SHA so
+a reader can check out exactly what a worker proposed before it saw the others.
+PR #1 was **squash** merged, so not one artifact commit is an ancestor of
+`main`: verified after the merge, `git merge-base --is-ancestor` returns false
+for all of them. The artifact *files* survive in `main`'s tree, but every SHA
+the records cite would have become unreachable the moment the branches were
+deleted, and would eventually be garbage collected. The records would still
+have claimed the SHAs were "authoritative and independently checkable" while
+being silently false.
+
+Round 1's note said citations "resolve after the doer branches are deleted"
+because they were merged into the round branch. That reasoning quietly assumed
+the round branch survives. It does not; PR hygiene requires deleting it.
+
+Before deleting any branch, every artifact commit was tagged and the tags were
+pushed to `origin`:
+
+- `artifacts/round1-integrated` at `ec76fa9`, the integrated round-branch head
+  as merged. This one tag reaches **every** artifact commit cited by records
+  001 through 007.
+- Per-branch tags for legibility: `artifacts/r1-{claude,codex,agy}`,
+  `artifacts/r2-{claude,codex,agy}-gate`,
+  `artifacts/r2-{claude,codex,agy}-signoffs`, and the marker-fix and
+  consensus-fix branch heads.
+
+16 `artifacts/*` tags are on `origin`. **Do not delete them.** They are the only
+thing keeping the decision records' citations honest.
 
 All are merged into `round/1-architecture`, so the records' citations resolve
 after the doer branches are deleted. **Do not delete a doer branch before
@@ -264,6 +301,22 @@ synthetic fixtures, not leftovers, and must not be "fixed".
 The two 001 findings were dispatched as **one** assignment, because where
 revalidation hooks depends on how the gate generalizes. All three doers
 accepted the coupling.
+
+## End-of-round sweep
+
+Run at the close of this round, results recorded rather than assumed.
+
+- **Open team PRs: zero.** PR #1 merged as `76c3357`.
+- **Stale team branches: zero.** `round/1-architecture` deleted on both origin
+  and locally by the merge. All 14 local doer branches deleted (round-1 three,
+  round-2 gate three, round-2 signoffs three, plus five fix/review branches).
+  Nothing is retained on purpose.
+- **Doer-prefixed branches on origin: zero.** Guard run, passed. `origin` has
+  `main` only, plus the 16 `artifacts/*` tags.
+- **Worktrees** at `/home/scott/foundry/projects/.worktrees/vcf-ops-mcp-r1-<doer>`
+  were left in place, detached at `main`, for the next round to reuse. They hold
+  untracked `scratch/` and `.team/markers/` from this round, which is permitted
+  worktree scratch and does not merge.
 
 ## Next run starts here
 
