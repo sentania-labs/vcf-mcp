@@ -5,11 +5,59 @@ update it before exiting. This is machinery, not a human changelog.
 
 ## Current assignment
 
-**Round:** 1 (the project's first round)
-**Orchestrator run:** `orchestrator-run-20260720-231633` (phases 2 and 3)
+**Round:** 1 (the project's first round), continuation run
+**Orchestrator run:** `vom-r2-esc-20260721-171423` (escalation resolutions +
+external review findings + merge)
 **Prior runs this round:** `...-223456` (phase 1 dispatch), `...-224036`
-(duplicate-dispatch near-miss, corrected)
-**Status:** deliverable complete, PR open, awaiting external review
+(duplicate-dispatch near-miss, corrected), `...-231633` (phases 2 and 3, PR)
+**Status:** in flight, addressing Scott's five resolutions and the three
+external Codex findings on PR #1, then merging
+
+### Continuation scope, given by Scott 2026-07-21
+
+Scott resolved all five round-1 escalations. Full text of the resolutions is
+the run's prompt; the substance is folded into records 001 and 003 by this
+run. Summary of the rulings:
+
+1. Action authorization is **fine-grained and default-deny**: per-key
+   action-class allow-list intersected with a global policy; a newly minted
+   key can do nothing until scopes are explicitly granted.
+2. **Grantable scopes derive from implemented capabilities**, read or write.
+   A scope is assignable only if the server implements the matching
+   capability, so there are no phantom grants. This sharpens the earlier
+   "no action keys before Gate 2" recommendation into one general rule.
+3. **Keyring co-location: Option A ratified**, residual risk accepted for MVP,
+   with a deferral ticket. The deferral rationale must be recorded accurately:
+   runtime key injection does not remove the key from the host, it only
+   relocates it. The genuine win is getting the key off the same volume as the
+   ciphertext. Full host-root compromise is unbeatable at this layer. The
+   correct long-term answer is an external secrets broker / KMS, not "inject
+   the key".
+4. **`jinja2` approved.** Closed.
+5. **DEVEL read-only service account: in flight**, provisioned via lab-admin.
+   Confirm it landed before Phase 1 recon depends on it.
+
+### External Codex findings on PR #1 (one round, no re-review loop)
+
+| # | Finding | Lane |
+| --- | --- | --- |
+| 1 | 001: revalidate the action against VCF Ops immediately before applying | orchestrator record edit |
+| 2 | 001: route alert-acknowledgements and report-runs through plan-then-apply | **full protocol** |
+| 3 | Two sign-off markers missing required fields | fast lane |
+
+### Triage for this run
+
+- **Findings 1 and 3, and resolutions 1-3: not design forks.** Finding 1
+  restores a freshness check that codex-worker's accepted critique already
+  required and synthesis dropped; restoring converged content is a synthesis
+  correction, not a new decision. Resolutions 1-3 are the principal's rulings
+  being transcribed. Finding 3 is mechanical front-matter.
+- **Finding 2 is a design fork and gets the full protocol.** Codex named two
+  materially different approaches (a generalized operation type with a payload
+  fingerprint, versus dedicated plan/apply paths per API family), it lands in
+  a record governing the protected path `src/vcf_ops_mcp/`, and a reasonable
+  engineer could pick either. Scoped to that one question rather than
+  reopening fork 1.
 
 ### Goal statement (verbatim, as given)
 
@@ -80,7 +128,9 @@ fast-lane item was triaged separately mid-round (see "Fast-lane fix" below).
 | 3 ballots + synthesis | **done** | two questions, four ballots each, both 4-0 |
 | records | **done** | 001-006 committed, signed by all three doers |
 | integration | **done** | all doer branches merged into `round/1-architecture` |
-| PR | **open** | PR #1, awaiting external Codex review |
+| PR | **open** | PR #1, external Codex review received and addressed |
+| external review | **done** | 3 findings, all addressed this run, one review round per convention |
+| r2 protocol round | **done** | findings 1+2 ran the full protocol; see below |
 
 ## Round mechanics
 
@@ -90,11 +140,27 @@ fast-lane item was triaged separately mid-round (see "Fast-lane fix" below).
 
 ### Artifact SHAs (cited by the decision records)
 
+Round 1 (records 001-006):
+
 | Doer | Proposal | Critique | Ballot | Signature + peer review |
 | --- | --- | --- | --- | --- |
 | claude-worker | `85cf712` | `6eb92bd` | `ab2570c` | `4cde29b` |
 | codex-worker | `86b3404` | `5bc71c9` | `da6e6a5` | `dd9cf51` |
 | agy-worker | `68e30bd` | `591cfb6` | `0a36659` | `9576887` |
+
+Round 2, the mutation gate (record 007). Artifact branches were **frozen** at
+their ballot heads so the peer markers naming those SHAs stay valid; the
+signature and peer-review artifacts went on separate `*/r2-signoffs` branches
+for the same reason.
+
+| Doer | Proposal | Critique | Ballot | Signature + peer review |
+| --- | --- | --- | --- | --- |
+| claude-worker | `ce6e6c0` | `eb79162` | `f2669cf` | `a307102` |
+| codex-worker | `63567bf` | `9fbed79` | `74a675b` | `10c9282` |
+| agy-worker | `a08f6ae` | `afa891f` | `9486d62` | `726daf4` |
+
+Peer review assignment rotated so no resident reviewed its own work:
+claude reviewed codex, codex reviewed agy, agy reviewed claude.
 
 All are merged into `round/1-architecture`, so the records' citations resolve
 after the doer branches are deleted. **Do not delete a doer branch before
@@ -115,20 +181,62 @@ Ballots were 4-0 on both contested questions (skills content model, keyring
 co-location), so **the critic seat was correctly not invoked**. Per
 `.team/team-config.yaml` cursor is tiebreaker-only on a 2-2 split.
 
-## Escalations to Scott, open
+## What round 2 decided (record 007)
 
-None of these blocks the PR; all block Phase 1 or Phase 2 build work.
+The mutation gate, resolving both substantive external findings. Read record
+`007-mutation-gate-generalization.md` rather than this summary.
 
-1. **Action authorization granularity** (001). Team recommends per-key
-   action-class subsets intersected with a global policy, default empty.
-2. **Minting actions-scoped keys before the Phase 2 gate** (001, 003). Team
-   recommends no.
-3. **Ratification of the keyring co-location residual risk** (003). 4-0 for
-   Option A with three enforced separation controls; codex-worker and
-   agy-worker held that Scott accepts the residual risk, not the team.
-4. **The `jinja2` dependency** (004). Verified not transitive from `mcp`.
-5. **A DEVEL API service account** (006). None exists for this project;
-   claude-worker's recon borrowed vcf-content-factory's `devel` profile.
+**The round's discovery: the VCF Ops API has no alert acknowledgement verb.**
+codex-worker and claude-worker found it independently; the orchestrator verified
+it before synthesis. `acknowledg` appears **zero times** in the 9.1 OpenAPI, and
+the real verb set is suspend, cancel, takeownership, releaseownership,
+assignownership. There is also **no action validation endpoint**: the action
+surface is exactly four paths. Two of three proposals were built on operations
+that do not exist, and claude-worker's phase-1 verb list was wrong in its own
+recon, which it disclosed unprompted.
+
+Four contested questions, four ballots each. **No question split 2-2, so the
+critic seat was correctly not invoked.** Results: one alert per plan (3-1),
+action revalidation as a blocking Phase 2 gate question (4-0), flat optional
+scalars for `plan_mutation` (4-0), `report:run` ships shallow (3-1),
+`report:publish` deferred (4-0). Dissents from agy-worker (Q1) and codex-worker
+(Q4a) are recorded verbatim in 007.
+
+Two workers voted against their own prior positions and said so.
+
+**Two orchestrator-authored rulings**, flagged as such in the record because
+they were not balloted: the submitted-bytes ruling (submit stored bytes,
+recomputed payload is a comparison input only) and the stale-denial-rate ruling.
+All three doers were asked to object and none did.
+
+## Escalations to Scott
+
+### Resolved 2026-07-21, folded into the records
+
+1. **Action authorization granularity** (001). Fine-grained, default-deny.
+2. **Grantable scopes** (001, 003). Derived from implemented capabilities, read
+   or write, so there are no phantom grants.
+3. **Keyring co-location** (003). Option A ratified, residual risk accepted for
+   MVP. The deferral points at an external broker/KMS, **not** at runtime key
+   injection, which only relocates the key rather than removing it.
+4. **`jinja2`** (004). Approved. Closed.
+
+### Open
+
+5. **A DEVEL API service account** (006). **In flight**, not closed. Scott had
+   lab-admin provision a read-only `vcf-ops-mcp` account on devel and prod;
+   the cross-workspace request is filed. **Confirm the account landed before
+   Phase 1 recon depends on it.** Until then recon borrows
+   vcf-content-factory's `devel` profile, which is what both rounds used.
+
+6. **NEW: `docs/SPEC.md` 4.1 contains a contract error.** It requires "alerts:
+   alerts, symptoms, acknowledge", and the API has no acknowledge verb. This is
+   Scott's call, not the team's: SPEC is the design contract and a protected
+   path, and the nearest substitute verb is `cancel`, which closes an alert
+   outright and is materially wider than what SPEC's wording implies. The team
+   did not guess. Three options are laid out in record 007's "Escalated to the
+   principal". **Does not block Phase 1**, since no alert verb is grantable in
+   MVP.
 
 ## Fast-lane fix taken mid-round
 
@@ -145,28 +253,70 @@ template leftover. It is prose in a comment with no behavioral effect. The
 `src/core/` and `ARCHITECTURE.md` strings elsewhere in that file are deliberate
 synthetic fixtures, not leftovers, and must not be "fixed".
 
+## How the three external findings were addressed
+
+| Finding | Lane | Resolution |
+| --- | --- | --- |
+| 001: revalidate before applying | full protocol, merged with the next | Record 007. Mandatory pre-apply revalidation for every family; the action family's source is populate and its safety is a blocking Phase 2 gate question |
+| 001: route alert acks and report runs through plans | full protocol | Record 007. One generalized gate, closed `operation` enum, per-family precondition fingerprints |
+| sign-off markers missing fields | fast lane | Each marker re-authored by its own original reviewer (`bf93986`, `f462682`), peer-reviewed by claude-worker (`6beaa59`) |
+
+The two 001 findings were dispatched as **one** assignment, because where
+revalidation hooks depends on how the gate generalizes. All three doers
+accepted the coupling.
+
 ## Next run starts here
 
-1. **Get the external Codex review on PR #1** and address its findings. The
-   constitution requires one external review round before merge; per
-   sentania-labs convention one round satisfies the gate, no re-review loops.
-   Route substantive fixes to the owning doer and integrate signed commits
-   locally. This is the only thing standing between the round and merge.
-2. **Merge PR #1**, then delete `round/1-architecture` and all five local doer
-   branches (three round branches plus `codex/fix-consensus-selftest` and
-   `claude/fix-consensus-review`).
-3. **Write the `.review-passed` marker straight to `main`**, not as its own PR.
-4. **Put the five escalations above in front of Scott** before the Phase 1
-   build round is scoped. Items 4 and 5 block build work directly.
-
-### Retained on purpose
-
-Five local doer branches are retained because PR #1 is not merged: the three
-round-1 branches plus `codex/fix-consensus-selftest` and
-`claude/fix-consensus-review`. All are merged into the round branch. None is on
-origin, and none may be pushed there. Delete them at merge, per step 2.
+1. **Confirm the DEVEL service account landed** (escalation 5) before scoping
+   Phase 1 recon against it.
+2. **Put escalation 6, the SPEC contract error, in front of Scott.** Phase 1 can
+   proceed without it, but SPEC stays wrong until he rules.
+3. **Scope the Phase 1 build round**: read-only tool families against DEVEL.
+   Record 007's division of labor is prospective and ready to use. Action scopes
+   stay ungrantable until Gate 2.
+4. **Non-blocking sweep item** carried from round 1: the comment at
+   `tools/consensus-check.py:516` still cites `001-town-motion.md`, a template
+   leftover. Prose only, no behavioral effect. The `src/core/` and
+   `ARCHITECTURE.md` strings elsewhere in that file are deliberate synthetic
+   fixtures and must **not** be "fixed".
 
 ## Notes for the next run
+
+### From the round-2 continuation run
+
+- **Freeze artifact branches; put signatures on a separate branch.** A peer
+  marker names an exact SHA and stops covering the branch the moment the branch
+  moves. Round 2 kept `*/r2-mutation-gate` frozen at its ballot head and put the
+  markers and record signatures on `*/r2-signoffs`. Without that split, every
+  signature commit would have invalidated the marker written just before it.
+- **Ask signers to confirm specific things, not to "sign off".** Each signature
+  dispatch named the exact claims to confirm or deny (tally, dissent verbatim,
+  concessions unsoftened, measurements unmisstated) and said plainly that
+  withholding was a valid outcome. claude-worker then found **two real defects in
+  the orchestrator's own record**: an unmarked truncation of its own concession
+  quote, and missing timestamps on the `Signed-off-by:` lines that made
+  `tools/consensus-check.py --self-test` fail at `6b7bdcf`. The self-test scans
+  real records, so that one would have blocked CI. A generic "please sign"
+  would not have surfaced either.
+- **Run the gate yourself before opening or updating the PR.** Verified: the
+  self-test failed at `6b7bdcf` and passes after the fix. Note
+  `--changed-files` takes a **path to a file**, not a space-separated list;
+  passing a list produces a `FileNotFoundError` traceback that looks like a
+  tool bug and is not.
+- **Verify a load-bearing cross-worker factual dispute yourself.** claude-worker
+  and codex-worker contradicted each other on the alert verb set. The
+  orchestrator checked the OpenAPI directly before synthesizing, rather than
+  taking the more detailed proposal's word. codex-worker was right.
+- **A confidently argued position can still reintroduce the defect.**
+  agy-worker's critique concluded that actions should not be revalidated live at
+  all, accepting the TOCTOU gap. That was well argued and would have undone the
+  exact finding the round was convened to fix. It went to a ballot rather than
+  being absorbed, and lost 4-0 including agy-worker's own vote.
+- **Merge `main` into the round branch before opening the PR** if `TEAM-STATE.md`
+  moved on `main` mid-round. The round branch carried a stale copy from when it
+  was cut.
+
+### From the original round-1 runs
 
 - **The phase-1 near-miss, and the rule it produced.** Run `...-224036` was
   handed a confident premise that the phase-1 dispatch was dead and acted on
