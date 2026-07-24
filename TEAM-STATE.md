@@ -6,13 +6,142 @@ update it before exiting. This is machinery, not a human changelog.
 ## Current assignment
 
 **Round:** 3, the Phase 1 build (first real code round)
-**Orchestrator run:** `gh-issue-2-triage-20260724-205415` (resumed the round
-after `vom-p1-20260721-194336` stopped at the phase-2 boundary)
-**Status:** **phase 3 complete. Waiting on the principal's approval of
-`docs/proposals/2/` on GitHub issue #2.** No code has been written yet, by
-design: this round produced proposals, critiques, ballots, and a consensus spec
-plus workplan. **Implementation dispatch is the next step and it is gated on
-that approval.**
+**Orchestrator run:** `gh-issue-2-execution-20260724-215456` (execution run;
+supersedes the triage run's state below)
+**Status:** **APPROVED and building. Record 009 is signed by all three doers and
+the consensus gate is green. Workplan step 0 (both day-one spikes) is COMPLETE.
+Step 1, `contracts.py`, is the next dispatch and nothing blocks it.**
+
+Still no slice code, by design: step 0 ran first because either spike could
+reorder the build. One of them did.
+
+### THE NEXT RUN STARTS HERE, read this first
+
+1. **Dispatch `contracts.py` to codex-worker** (workplan step 1, one short
+   commit, the only planned serialization point). It must carry, per record 009
+   Amendment 2 ruling 2, a **target-configuration-generation and
+   client-invalidation protocol**, which claude-worker found missing and
+   codex-worker accepted. Build it against spike 001's stated dispatcher
+   contract, which is written out in that spike's "Dispatcher consequence"
+   section.
+2. **Then dispatch the four slices in parallel** per record 009 decision 6:
+   codex spine, claude read plane, agy delivery, agy skills (skills carries the
+   critic's binding rider: distinct item, distinct review, non-blocking
+   relative to the Gate 1 deploy).
+3. **The two spike branches are NOT merged and owe peer sign-off markers.** See
+   "Owed" below. Do this before or with the next integration, not later.
+4. **Do not re-run spike 002** until the fleet-caddy blocker clears. Watch for
+   the principal's answer on issue #2.
+
+### Step 0 spike results, both complete
+
+| Spike | Owner | Verdict | Artifact | Branch, unmerged |
+| --- | --- | --- | --- | --- |
+| 001 FastMCP identity injection | codex-worker | **PASS** | `6d00202f402d1644e2b19f97e27c8ca884d61180` | `codex/r3-spike-identity` |
+| 002 Streamable HTTP through fleet-caddy | agy-worker | **BLOCKED** | `dbe1168` | `agy/r3-spike-transport` |
+
+**Spike 001 unblocks the dispatcher and pins its contract.** `mcp==1.28.1`,
+identity read via `ctx.request_context.request.state`, correct under two
+concurrent sessions. The load-bearing finding is that **identity belongs to the
+HTTP request, not the MCP session**: codex changed the key header mid-session
+and the handler saw the new one. So caching identity on the session would
+silently misattribute audit records, and the same-session key-change case is now
+a required test. It also flagged that it tested exactly `1.28.1`, not every
+patch, and that `mcp.server.auth.middleware.auth_context.get_access_token` is a
+different mechanism it did not test.
+
+**Spike 002 is the blocker.** See `.team/blocked/fleet-caddy-slot-config.md`.
+The fleet-caddy per-slot config for this project is missing (`/etc/caddy/conf.d/
+vcf-ops-mcp` is empty inside the container), so TLS dies at Client Hello. DNS
+resolves and `DOCKER_DEPLOY_KEY` exists, so only the caddy half of the handoff is
+missing. agy-worker correctly **stopped rather than substituting a local proxy**,
+so the proxy question (buffering, idle timeout, header forwarding) is genuinely
+unanswered. Escalated to the principal on issue #2. **Blocks only the delivery
+slice's deploy verification and Gate 1's connect step**; everything else
+proceeds.
+
+### Owed by the next run, do not lose these
+
+- **Peer sign-off markers for both spike branches.** Neither is merged into the
+  round branch, deliberately: this run ran out of cap before it could dispatch a
+  review round, and merging without a marker would have violated the gate to
+  save five minutes. Each needs a marker from a non-author resident naming the
+  exact commit. Nothing is lost; both branches are retained on purpose.
+- **A process error of this run, recorded so it is not repeated.** The agy spike
+  dispatch was killed by the orchestrator's own tool timeout at 10 minutes, not
+  by its cap and not by any worker fault. It had already committed `dbe1168`, so
+  no work was lost and the doc is complete, but **no end marker was written**.
+  A missing end marker here means "the orchestrator killed it", not "the worker
+  died". The lesson: the harness's Bash timeout ceiling is 10 minutes, so a
+  dispatch with a longer cap must be launched and then polled in a separate
+  call, never waited on inline with `wait`.
+
+### The approval, and what it settled
+
+The principal commented exactly `approved` on issue #2 at 2026-07-24T21:41:47Z.
+Recorded as **record 009 Amendment 1**, which reads an unconditional approval of
+a spec that states its own answers as approving those answers: reports
+definitions-only, TLS verification off for the first DEVEL registration with a CA
+bundle preferred and still his call, and the decision 7-sub audit-invariant
+reading. All three stay open for him to overrule.
+
+### The sign-off round found real defects. Record 009 Amendment 2
+
+**codex-worker withheld its signature and was right to.** Its
+fingerprint-pinning objection had been paraphrased in a section where both other
+objections were verbatim quotes. claude-worker separately found that its own
+reports objection was front-truncated, dropping its only procedural objection of
+the round, plus two unmarked tail truncations. **The orchestrator verified every
+claim against the ballots rather than taking them on report**, fixed all of it,
+and codex-worker signed after. This is the second consecutive round where asking
+signers to confirm *named specific claims* rather than to "sign off" caught
+defects in the orchestrator's own record. Keep using that framing.
+
+Four rulings in Amendment 2, none of which changes a decision:
+
+1. **Numeric thresholds belong to the slice owner**, derived, declared, tested,
+   and put in the Gate 1 packet. Applies symmetrically to codex's free-space
+   reservation and claude's metrics cap. codex additionally owes the reservation
+   **accounting semantics** (terminal row, WAL growth, checkpoint headroom, and
+   how concurrent admitted calls consume and release it), which was the real gap
+   in its objection.
+2. **`contracts.py` carries a target-change invalidation protocol** at step 1.
+3. **Reports scope is now a Gate 1 packet item.** claude-worker checked
+   Amendment 1's claim that all three questions were packet items and found it
+   false for reports, which had no scheduled re-ask.
+4. **The audit-invariant reading goes to the principal ahead of Gate 1**, not
+   only in the packet, because changing that terminal contract late is
+   expensive. Asked on issue #2 this run.
+
+### Signature artifacts, round 3 implementation dispatch
+
+| Doer | Signature | Branch |
+| --- | --- | --- |
+| claude-worker | `92cf4a4f6c4cb40c2464a962c80af90a635211dc` | `claude/r3-signoffs` |
+| codex-worker | `bebc4ac448bb9600acb98c30439ab2d241974450` | `codex/r3-signoffs` |
+| agy-worker | `27f0e3c06763f5fc93fccbc09d0ad3b0adf8746e` | `agy/r3-signoffs` |
+
+codex-worker's withholding is preserved at `c3f392c730f472461dd4a7e9e271968f2ae91da2`.
+All three signature files are copied verbatim into `docs/decisions/signatures/`
+on the round branch, so they survive branch deletion.
+
+**Depth was not comparable and the next run should weigh it accordingly:**
+claude 256 lines and four of the five findings, codex 69 lines and the
+withholding, **agy 8 lines in a 96-second dispatch confirming all six items with
+no specifics**, including that the acceptance criteria for the largest slice in
+the plan (delivery, 8 to 12 days, its own) are "unambiguous, directly testable,
+and buildable as written". Its one checkable claim, that its own objection is
+quoted verbatim, was independently verified and is true. Recorded in 009's
+Amendment 2 process note. This is the second consecutive round with the least
+scrutiny from this seat on the largest slice. Its spike work this run, by
+contrast, was honest and correct.
+
+### Historical: the triage run's status, now superseded
+
+The round previously sat parked awaiting approval under run
+`gh-issue-2-triage-20260724-205415`. That gate is closed. The sections below
+from "Deliverable of this run" onward describe that earlier run and are context,
+not current state.
 
 **The Gate 1 blocker is CLOSED**, re-verified live by this run rather than taken
 on relay. See "Escalations".
