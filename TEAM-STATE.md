@@ -6,18 +6,35 @@ update it before exiting. This is machinery, not a human changelog.
 ## Current assignment
 
 **Round:** 3, the Phase 1 build (first real code round)
-**Orchestrator run:** `vom-p1-20260721-194336`
-**Status:** **in progress, stopped cleanly at the phase-2 boundary.** The SPEC
-correction is landed. Phases 1 and 2 are complete and verified. **Phase 3
-(ballots + synthesis) is where the next run starts.** No code has been written
-yet, by design: this round's phases 1 and 2 produced proposals and critiques
-only.
+**Orchestrator run:** `gh-issue-2-triage-20260724-205415` (resumed the round
+after `vom-p1-20260721-194336` stopped at the phase-2 boundary)
+**Status:** **phase 3 complete. Waiting on the principal's approval of
+`docs/proposals/2/` on GitHub issue #2.** No code has been written yet, by
+design: this round produced proposals, critiques, ballots, and a consensus spec
+plus workplan. **Implementation dispatch is the next step and it is gated on
+that approval.**
 
-**One new escalation for Scott, and it blocks Gate 1. See "Escalations".**
+**The Gate 1 blocker is CLOSED**, re-verified live by this run rather than taken
+on relay. See "Escalations".
 
 Round 1 and round 2 are complete and their history is preserved further down
 this file, from "Continuation scope, given by Scott" onward. Read the round-3
 sections first; the older sections are context, not current state.
+
+### Deliverable of this run
+
+`docs/proposals/2/` on the round branch, per the GitHub-issue pipeline contract:
+`TLDR.md` (what the principal actually reads), `SPEC.md` (the consensus build
+spec), `WORKPLAN.md` (slices, owners, sequencing, acceptance criteria), and
+`ballots/` (all four ballots plus the critic's vote). A deterministic wrapper,
+not this run, reads that directory off the round branch and posts it to issue
+#2. **No PR was opened and nothing merged to `main`**, per the assignment.
+
+The synthesis itself is `docs/decisions/009-phase1-build-synthesis.md`, which
+carries every ballot result, every losing objection verbatim, and the critic's
+tiebreaking vote verbatim. **009 is unsigned on purpose**; sign-offs from all
+three doers are collected at implementation dispatch, since this round
+authorizes no code.
 
 ### Round mechanics for round 3
 
@@ -41,8 +58,59 @@ sections first; the older sections are context, not current state.
 | SPEC amendment (fast lane) | **done** | record 008, codex authored, agy signed off, integrated |
 | 1 blind proposal | **done** | three proposals, blindness verified by history walk |
 | 2 adversarial critique | **done** | genuinely adversarial, real concessions |
-| 3 ballots + synthesis | **not started** | **next run starts here** |
-| implementation | not started | |
+| 3 ballots + synthesis | **done** | 7 questions, 4 ballots each, one 2-2 split decided by the critic; record 009 |
+| implementation | **blocked on approval** | gated on the principal approving `docs/proposals/2/` on issue #2 |
+
+### Ballot artifact SHAs, round 3 phase 3
+
+| Doer | Ballot (Q1-Q6) | Q7 ballot |
+| --- | --- | --- |
+| claude-worker | `20bca552980521f73908759d6843505ac01a3fdf` | `a7c210a51f11231d0bd087d0a01a20a047bc55eb` |
+| codex-worker | `e191214a9a86c5c674dfa9e7fe7bc7004377925a` | `ef60f4d20e674e681377a67737662ceab6407191` |
+| agy-worker | `75bfc1f67e049d72a7e0011b54c93063ab7a144d` | `612bbe6ce7e33be9dabcb153be799c6b1b4ec193` |
+
+The Q7 SHAs supersede the Q1-Q6 SHAs (each doer appended Q7 to its own ballot
+file), so the Q7 commit is the complete ballot. Both are cited in record 009.
+Ballot branches: `claude/p1-ballot`, `codex/p1-ballot`, `agy/p1-ballot`. Copies
+of all four ballots and the critic vote are committed under
+`docs/proposals/2/ballots/` on the round branch, so they survive branch deletion
+without needing the artifact-recording tooling.
+
+### Results, round 3 phase 3
+
+| # | Question | Result | Vote |
+| --- | --- | --- | --- |
+| 1 | Audit unavailability blocks startup? | No (1B), plus a binding admin-write rider | 4-0 |
+| 2 | Audit storage | SQLite, no rotation (2C) | 3-1, agy dissenting |
+| 3 | Fixtures | 3B plus four corrections | 3-1, agy dissenting |
+| 4 | Retry bound | 4B, explicit per-request counter | 4-0 |
+| 5 | Enforcement predicate | 5B, capability plus frozen allowlist | 4-0 |
+| 5-sub | Test-only mutating capability | Yes | 4-0 |
+| 6 | Decomposition | 6B, spine plus two corrections | 4-0 |
+| 6-sub | Three main slice owners | codex spine, claude read plane, agy delivery | 4-0 |
+| 6-sub | Skills owner | **agy-worker** | **2-2, critic decided** |
+| 7 | Terminal audit write failure | 7C-with-payload | 4-0 |
+| 7-sub | Escalate the invariant reading? | No, with two conditions | 4-0 |
+
+**The critic seat fired for the first time in this project.** Skills ownership
+split 2-2 (agy and codex for agy-worker; claude-worker and the orchestrator for
+codex-worker). The orchestrator could have voted the other way and closed it 3-1
+without a critic, and declined to. cursor voted **agy-worker**, against the
+orchestrator, and the orchestrator **adopted the critic's side** rather than
+holding and escalating. The critic attached a binding rider (skills is a
+distinct workplan item with distinct review, explicitly non-blocking relative to
+the Gate 1 deploy, redispatched rather than folded into the delivery PR if
+capacity fails) and that rider is in the workplan.
+
+**Critic capture gotcha for the next run:** `dispatch.sh cursor ... > file`
+produced a **zero-byte file** on both the first run and a retry, despite exit 0
+and despite `cursor-agent` working correctly when invoked directly. The vote was
+recovered from the systemd journal:
+`journalctl --user -u fdry-<label>-<ts>.service -o cat`. Do not treat an empty
+critic vote file as a missing vote; check the journal first. The critic also
+reported that `git show` was harness-rejected under `--mode ask`, so it voted
+from the four ballots rather than the six proposal and critique commits, and it
+said so itself. Recorded in 009.
 
 ### Artifact SHAs, round 3
 
@@ -137,31 +205,54 @@ not a verdict. **Ballot it.**
 
 ## Escalations to Scott, current
 
-### NEW and blocking Gate 1: the DEVEL service account sees only 4 objects
+### Open, and carried to the principal on issue #2 rather than blocking
 
-**Found by claude-worker during phase-1 recon; independently verified by the
-orchestrator before recording it here.**
+These three are in `docs/proposals/2/TLDR.md` as questions. None blocks the
+build; all three want an answer before or at Gate 1.
 
-The delivered read-only `vcf-ops-mcp` account authenticates fine against DEVEL
-and can enumerate **21 adapter kinds**, but
-`GET /suite-api/api/resources` returns `totalCount: 4`. Its role scope is
-restricted to a small object set rather than all objects.
+1. **Reports family scope.** Record 007 makes report run a mutation and DEVEL
+   has zero completed report instances, so Phase 1 reports is a list tool
+   returning nothing and a download tool with nothing to download. The spec
+   ships **report definitions listing only** and defers the rest to Phase 2.
+   That reduces `docs/SPEC.md` 4.1's `reports: list/run/download` line, which is
+   why it is asked rather than decided.
+2. **TLS trust material.** DEVEL's certificate is self-signed and does not
+   validate against the host trust store, so the honest first registration is
+   per-target verification disabled. The clean answer is a mounted lab CA
+   bundle, which is deployment trust material and therefore a principal
+   decision. Fingerprint pinning is **not** budgeted; see record 009.
+3. **The audit invariant reading.** The team reads "no tool path ships without
+   its audit write" as satisfied by a durable pre-execution attempt record plus
+   a typed `outcome_unknown` terminal state plus reconciliation plus
+   fail-closed. All four ballots voted not to escalate, on two conditions: that
+   the reading is written down in the record (done, 009 decision 7-sub) and that
+   it appears in the Gate 1 packet as a named item (in the workplan). It is the
+   principal's invariant and he should get to overrule the reading.
 
-Why this is Scott's call and not the team's: **Gate 1 is defined as Scott
-connecting Claude Code with a minted read-only key and running read queries
-against DEVEL.** Against a 4-object inventory that gate passes while
-demonstrating almost nothing, and it fails in a way that looks like a bug in
-this server rather than a permissions scope in the appliance. The team can
-build the whole of Phase 1 without this being fixed; the gate is what breaks.
+### CLOSED 2026-07-24: the DEVEL service account object scope
 
-The remedy is a lab-admin change to widen the account's role scope (the
-critique names `allowAllObjects`). **The orchestrator did not file that request
-itself**, because widening a lab service account's visibility changes its blast
-radius on both appliances and that is a principal decision, not a team one.
+**Resolved by Scott, and re-verified live by this run before being treated as
+resolved**, per the issue's explicit instruction not to trust the relayed
+assertion:
 
-**Does not block starting the build. Does block Gate 1 being meaningful.**
+```
+GET /suite-api/api/resources?pageSize=1            -> totalCount: 517
+GET /suite-api/api/adapterkinds                    -> 21 adapter kinds
+GET /suite-api/api/resources?adapterKind=VMWARE    -> totalCount: 169
+GET /suite-api/api/resources?adapterKind=CONTAINER -> totalCount: 52
+```
 
-### Closed 2026-07-21 by this run
+The account previously saw 4 objects and zero virtual machines. Gate 1 is
+meaningful again, and every payload-size and scope-control argument that the
+4-object world had softened is back at full force.
+
+**Note for the next run:** agy-worker's phase-3 ballot re-raised this blocker as
+its scope check *after* the dispatch prompt gave it the 517-object measurements
+at the top of the page. None of its six votes turns on the count and all six
+were counted, but a seat that does not update on evidence placed in front of it
+is worth watching. Recorded in 009's process note.
+
+### Closed 2026-07-21 by the previous run
 
 - **Escalation 6, `docs/SPEC.md` 4.1 contract error: CLOSED.** Scott ruled
   option 3, drop the alert mutation requirement; alerts are read-only in the
@@ -180,23 +271,35 @@ radius on both appliances and that is a principal decision, not a team one.
 
 ## Next run starts here
 
-1. **Phase 3: ballots and synthesis.** Read the three proposals and three
-   critiques on `p1-proposals`. The four contested questions are listed under
-   "Live, genuinely contested" above. Collect **four ballots** on each (yours
-   plus all three doers). Per `.team/team-config.yaml`, cursor is
-   **tiebreaker-only**: invoke it only on a 2-2 split. Record every losing
-   objection verbatim.
-2. **Write the decision record** as `009-*.md`. 008 is taken by this run.
-   Cite the six artifact SHAs from the table above. Protected path
-   `src/vcf_ops_mcp/` is in scope, so it needs sign-offs from all three doers.
-3. **Then dispatch implementation** by capability. Record 007 carries a
-   prospective division of labor, and this round's proposals carry fresh
-   division-of-labor claims that partly contradict it (agy-worker claims the
-   store and hands the client concurrency to codex-worker). Prefer the fresh
-   claims; they were made against the concrete work.
-4. **Put the 4-object escalation in front of Scott** before Gate 1 is
-   scheduled.
-5. **Non-blocking sweep items:** `tools/consensus-check.py:516` still cites
+**Do not dispatch implementation until the principal approves
+`docs/proposals/2/` on GitHub issue #2.** That approval is the gate this round
+ends on. If the run wakes to an unapproved issue, there is nothing to do but
+wait; do not start the build to be helpful.
+
+On approval:
+
+1. **Collect sign-offs on record 009** from all three doers. Protected path
+   `src/vcf_ops_mcp/` is in scope, and 009 is deliberately unsigned today
+   because this round authorized no code.
+2. **Fold the principal's answers** to the three open questions (reports scope,
+   TLS trust material, the audit invariant reading) into 009 as an amendment
+   before dispatching, exactly as round 1's resolutions were folded into records
+   001 and 003. If he changes the reports scope, the read plane's estimate moves
+   by about a dispatch-day.
+3. **Run step 0 of the workplan first: the two day-one spikes.** FastMCP
+   identity injection (codex-worker) and the fleet-caddy Streamable HTTP smoke
+   (agy-worker). Both are cheap and either can reorder the build. Do not skip
+   them because the plan looks settled.
+4. **Then `contracts.py`** as one short commit from codex-worker, the only
+   planned serialization point, before the three slices fan out.
+5. **Then dispatch the four slices** per record 009 decision 6: codex-worker the
+   spine, claude-worker the read plane, agy-worker delivery, agy-worker skills.
+   The skills piece carries the critic's binding rider: distinct workplan item,
+   distinct review, non-blocking relative to the Gate 1 deploy, redispatched
+   rather than folded into the delivery PR if capacity fails.
+6. **Do not let CI and deploy be deferred behind admin and MCP** inside the
+   delivery slice. That was the original mitigation and it defers the long pole.
+7. **Non-blocking sweep items:** `tools/consensus-check.py:516` still cites
    `001-town-motion.md`, a template leftover, prose only. And codex-worker
    reported a duplicated `logs via VCF Ops).` line in `docs/SPEC.md` section 5
    that it deliberately left alone because record 008 did not authorize that
@@ -205,9 +308,45 @@ radius on both appliances and that is a principal decision, not a team one.
    `consensus-check.py` are deliberate synthetic fixtures and must **not** be
    "fixed".
 
-## End-of-run sweep, round 3 (mid-round, not end-of-round)
+## Sweep, round 3 phase 3 (2026-07-24, mid-round)
 
-Run at the close of this orchestrator run. The round is **not** closed, so the
+Run at the close of the phase-3 orchestrator run. **The round is still not
+closed**: it is parked waiting on the principal's approval of
+`docs/proposals/2/` on issue #2, so the end-of-round expectation of zero
+branches still does not apply. Every branch below is retained on purpose.
+
+- **Open team PRs: zero.** Correct. The round PR does not open until the
+  principal approves and the implementation slices integrate green. Only PR #1
+  (`round/1-architecture`) has ever merged.
+- **Doer-prefixed branches on `origin`: zero.** Guard run, passed.
+- **Round branch on `origin`: absent.** Correct, and it stays local until the
+  round PR opens.
+- **Process and artifact tags on `origin`: zero.** The convention change landed;
+  the 18 tags formerly on this origin are gone. Local tags remain the evidence
+  store. Release `v*` tags are unaffected and none exist yet.
+- **`main` merged into the round branch** at `3859e26`, taking `main`'s
+  `TEAM-STATE.md` on the one conflicted file. `main` and the round branch no
+  longer diverge on it.
+- **Phase-3 artifacts are copied into the tree, not just referenced by SHA.**
+  All four ballots and the critic vote are committed under
+  `docs/proposals/2/ballots/`, so the ballot branches can be deleted at round
+  close without orphaning anything a decision record cites.
+
+Local branches retained on purpose, updated for phase 3:
+
+| Branch | Why retained |
+| --- | --- |
+| `round/2-phase1-build` | the round's integration branch, holding this round's deliverable |
+| `claude/p1-ballot`, `codex/p1-ballot`, `agy/p1-ballot` | phase-3 ballot heads cited by record 009; content already copied into the round branch |
+| `p1-proposals` | all six phase-1/2 artifacts, tagged `artifacts/r3-p1-proposals-critiques` |
+| `claude/p1-build`, `codex/p1-build`, `agy/phase1-proposal` | proposal artifact heads cited by record 009 |
+| `claude/p1-critique`, `codex/p1-critique`, `agy/p1-critique` | critique artifact heads cited by record 009 |
+| `agy/p1-build` | still empty and unused; safe to delete at round close |
+| `codex/spec-alerts-read-only`, `agy/spec-review` | SPEC fast-lane heads, already merged at `0481ae7`; safe to delete once the round PR merges |
+
+## End-of-run sweep, round 3 phase 2 (superseded by the sweep above)
+
+Run at the close of the phase-2 orchestrator run. The round was **not** closed, so the
 normal end-of-round expectation of zero branches does not apply yet. Every
 branch below is **retained on purpose** because the round is mid-flight, and
 this section is what makes that a deliberate state rather than an abandoned one.
