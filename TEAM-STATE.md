@@ -8,25 +8,37 @@ update it before exiting. This is machinery, not a human changelog.
 **Round:** 3, the Phase 1 build (first real code round)
 **Orchestrator run:** `gh-issue-2-execution-20260726-014036` (external-review
 run; supersedes every earlier run's state in this file)
-**Status:** **The external Codex review on PR #3 landed, all three of its
-findings are fixed and peer-signed, and the fixes are integrated into the
-round branch.** Integrated suite: 126 passed, 13 skipped, 69 subtests.
+**Status:** **ROUND 3 IS COMPLETE AND CLOSED.** PR #3 squash-merged to `main`
+at `570fc3b`. The external Codex review's three findings were fixed by their
+authoring residents, peer-signed by non-authors, and integrated. Integrated
+suite at merge: 126 passed, 13 skipped, 69 subtests. `.review-passed` written
+straight to `main` at `02d0f61`. Sweep clean: zero open PRs, zero local
+branches other than `main`, zero doer branches on `origin`, zero process tags
+on `origin`.
 
 ### THE NEXT RUN STARTS HERE
 
-1. **Push the round branch and confirm CI is green on PR #3.** The three fix
-   commits and their sign-off markers are integrated locally but the push may
-   not have completed; check `git log origin/round/2-phase1-build..HEAD`.
-2. **Merge PR #3.** Every gate is now satisfied: CI, consensus gate,
-   constitution and decision-record conventions, all four original slices
-   signed, and the external review addressed with a peer sign-off per fix.
-3. **Then** delete the round branch and every doer branch, write the
-   `.review-passed` marker **straight to `main`, never as its own PR**, and
-   run the branch and PR sweep.
+**There is no open round. Round 3 delivered Phase 1 and nothing is in
+flight.** The next run opens round 4, and the first thing it does is triage.
 
-**Do not re-squash.** Follow-up commits on an already-open PR are the
-sanctioned exception to the squash rule, and this run added three of them plus
-their merges.
+1. **Read `docs/SPEC.md` and `docs/proposals/2/WORKPLAN.md`** to pick up what
+   Phase 1 left for Phase 2. The workplan is the roadmap record 009 was built
+   against.
+2. **Two carried items belong to the team, not to the principal**, and both
+   are recorded in full below. Neither is urgent and neither blocks Phase 2:
+   - the non-`CancelledError` `BaseException` lease leak in the dispatcher
+     (see "One known gap"), a few lines of change, fast-lane sized;
+   - `bin/team-provenance-ledger` writing an em-dash, which belongs to
+     whoever next touches the framework rather than to this project.
+3. **Phase 2 is gated on Scott.** Action execution against a live appliance
+   needs his Phase 2 gate approval, per `CLAUDE.md`. Do not dispatch anything
+   that mutates a live appliance before it, and never against prod. Read-only
+   recon against devel remains allowed.
+4. **The fleet-caddy blocker is still open externally** and still does not
+   block the team. See the section near the end of this head.
+
+Merge `origin/main` into the round branch before opening the round PR, not
+after. See "The `origin/main` conflict" below for why this recurs every round.
 
 ### The external review found three real defects, one per slice owner
 
@@ -229,7 +241,21 @@ at `f136b2a`, not under `docs/proposals/`; it ignored the convention that round
 and the recording had to account for it.
 
 The seven fix and review branches this run created cite no SHAs from any
-decision record, so they need no artifact recording before deletion.
+decision record, so they need no artifact recording before deletion. They were
+deleted in the closing sweep along with every other round and doer branch.
+
+### Sweep result, round 3 close
+
+Run at close, per the brief. All four assertions passed:
+
+- **Zero open team PRs.** PR #3 merged at `570fc3b`.
+- **Zero stale local branches.** `main` only. Every round, doer, fix, and
+  review branch deleted, along with all 20 worktrees.
+- **Zero doer-prefixed branches on `origin`.** The guard ran and exited clean.
+- **Zero process tags on `origin`.**
+
+This is the first round to close with nothing retained, which is what the
+brief said to expect.
 
 ### Record 010: verbatim artifacts are exempt from the dash rule
 
