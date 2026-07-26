@@ -6,176 +6,213 @@ update it before exiting. This is machinery, not a human changelog.
 ## Current assignment
 
 **Round:** 3, the Phase 1 build (first real code round)
-**Orchestrator run:** `gh-issue-2-execution-20260726-011017` (execution run;
-supersedes every earlier run's state in this file)
-**Status:** **ROUND PR OPEN AND GREEN. All four slices are signed and
-integrated. `https://github.com/sentania-labs/vcf-ops-mcp/pull/3` awaits the
-external Codex review, which is the last gate before merge.**
+**Orchestrator run:** `gh-issue-2-execution-20260726-014036` (external-review
+run; supersedes every earlier run's state in this file)
+**Status:** **The external Codex review on PR #3 landed, all three of its
+findings are fixed and peer-signed, and the fixes are integrated into the
+round branch.** Integrated suite: 126 passed, 13 skipped, 69 subtests.
 
 ### THE NEXT RUN STARTS HERE
 
-1. **Read the external Codex review on PR #3 and address its findings in that
-   same PR.** The constitution requires this before merge, and the sentania-labs
-   convention is one review round, no re-review loops. `chatgpt-codex-connector`
-   reviews automatically on PR open; it did so on PR #1 with no triggering
-   comment. If no review has appeared, wait for it rather than merging.
-   **Route every substantive finding to its owning doer** and integrate the
-   resulting signed commits locally. Follow-up commits on an already-open PR are
-   the sanctioned exception to the squash rule: do **not** re-squash mid-review.
-2. **Then merge PR #3** and delete the round branch and all doer branches, and
-   write the `.review-passed` marker **straight to `main`, never as its own PR**.
-3. **Then the branch and PR sweep**, which for the first time this round should
-   expect zero retained branches.
+1. **Push the round branch and confirm CI is green on PR #3.** The three fix
+   commits and their sign-off markers are integrated locally but the push may
+   not have completed; check `git log origin/round/2-phase1-build..HEAD`.
+2. **Merge PR #3.** Every gate is now satisfied: CI, consensus gate,
+   constitution and decision-record conventions, all four original slices
+   signed, and the external review addressed with a peer sign-off per fix.
+3. **Then** delete the round branch and every doer branch, write the
+   `.review-passed` marker **straight to `main`, never as its own PR**, and
+   run the branch and PR sweep.
 
-Round PR head is **two commits**: the squash (124 files) plus one
-bookkeeping commit syncing `TEAM-STATE.md` with `main`. That second commit
-exists because squash-merging the first alone would have overwritten `main`'s
-orchestrator state with the older copy captured at squash time. **Do not
-re-squash**; follow-up commits on an open PR are sanctioned.
+**Do not re-squash.** Follow-up commits on an already-open PR are the
+sanctioned exception to the squash rule, and this run added three of them plus
+their merges.
 
-Original squash: Checks at open: CI Pipeline pass,
-consensus gate pass, constitution and decision-record conventions pass, Build &
-Deploy skipping (correctly, it is the deploy job and the fleet-caddy slot is
-still blocked).
+### The external review found three real defects, one per slice owner
 
-### Assignment premise correction, read this before anything else
+`chatgpt-codex-connector` reviewed `7180ba2` automatically at
+2026-07-26T01:30:31Z. Three findings, and they partitioned cleanly by
+authorship, so each went back to the resident that wrote the code.
 
-This run's assignment (the GitHub-issue pipeline manual continuation, authored
-2026-07-25) states the next step as "dispatch contracts.py, then the three
-slices in parallel". **That is stale and was not followed.** `contracts.py`
-landed at `8806063` and integrated at `522218e`; all four slices are built; two
-were already signed and integrated. The assignment's own governing sentence is
-"continue the Phase 1 build exactly where TEAM-STATE says", so TEAM-STATE was
-treated as the authority and the parenthetical as an echo of an issue comment
-the work had already overtaken.
+| # | Finding | Sev | Owner | Reviewer | Signed SHA |
+| --- | --- | --- | --- | --- | --- |
+| 1 | audit lease leaks on `CancelledError` | P1 | codex-worker | claude-worker | `59f5c2e` |
+| 2 | deploy key survives early exit | P1 | agy-worker | codex-worker | `3a58ba7` |
+| 3 | response cap checked after buffering | P2 | claude-worker | agy-worker | `e88f4c1` |
 
-This was **not** written up as a blocked marker, and the reasoning is recorded
-here deliberately so a later run can disagree with it: the assignment's
-stop-and-block instruction is aimed at a contradicted *premise*, and the premise
-(Scott approved, record 009 signed, spikes done, build proceeds) is true in
-every particular. Only the step pointer was stale, and the assignment itself was
-written to correct exactly that class of staleness. Blocking would have stalled
-a round that was two mechanical fixes from its PR.
+No resident reviewed its own work. Every fix merged at its reviewed SHA
+without rebase, so each marker still names the exact commit it covers.
 
-### What this run did
+### Finding 2 took four passes, and the escalation was correct each time
 
-1. **Record 010**, the dash-rule ruling (see below). Committed at `a61fbcf`.
-2. **Delivery fix** dispatched to agy-worker, `11b0227` to `5bd75c6`. Both Tier
-   1 items closed and **verified by the orchestrator**.
-3. **Skills fix** dispatched to agy-worker, `88530b3` to `ed8eabb`. The one open
-   item closed and **verified by mutation**, see below.
-4. **Skills whitespace** dispatched, for symmetry of standard (see below).
-5. **Delivery re-review** dispatched to codex-worker at `5bd75c6`.
+This is the one worth reading. codex-worker withheld sign-off **three times**
+on the deploy key fix, and every withhold was substantiated rather than
+stylistic. The sequence:
 
-### The skills sort guarantee: verified by the orchestrator, not on report
+- `106a317`, agy installed the `EXIT` trap after `chmod 600`. Withheld: if
+  `chmod` fails under error exit, Bash leaves the step before the trap is
+  installed and the key stays in the checkout.
+- `e1ff831`, agy moved the trap ahead of `chmod`. Withheld again, and this is
+  the ruling that mattered: **the deploy job runs on a self-hosted runner, so
+  the checkout is reusable rather than ephemeral.** A partial key stranded
+  there persists indefinitely, so the narrowness of the remaining write window
+  does not bound the harm. codex prescribed the design: key under
+  `$RUNNER_TEMP`, trap installed before any write.
+- `2e8d353`, agy implemented that design with `install -m 600 /dev/null`,
+  which also closes the mode window entirely. Withheld a third time on two
+  narrow defects, both **tested rather than asserted**: agy's commit message
+  claimed an empty `$RUNNER_TEMP` would resolve to `/deploy_key` and "safely
+  fail on write due to lack of root permissions", and codex probed it and
+  found root can write `/`; and `trap "rm -f '$KEY_PATH'" EXIT` interpolates
+  the path into shell source, which codex broke with an apostrophe.
+- `3a58ba7`, agy applied codex's prescribed two lines. **Signed off.**
 
-claude-worker's held item was that `test_build_index_data_is_sorted` could not
-detect deletion of the sort. agy-worker took the reviewer's stated preference
-(monkeypatch `Path.iterdir` to yield reverse order). The orchestrator ran the
-mutation itself on a `git archive` export under `/tmp`:
+The final shape:
 
-    # sort at skills.py:217 commented out
-    FAILED tests/test_skills.py::test_build_index_data_is_sorted
-    1 failed, 7 passed
-    # restored
-    8 passed
+```sh
+: "${RUNNER_TEMP:?RUNNER_TEMP must be set and nonempty}"
+KEY_PATH="$RUNNER_TEMP/deploy_key"
+trap 'rm -f -- "$KEY_PATH"' EXIT
+install -m 600 /dev/null "$KEY_PATH"
+echo "$DEPLOY_KEY" > "$KEY_PATH"
+```
 
-The guarantee now holds. This was checked because the dispatch was 77 seconds
-and this file has flagged that seat's short dispatches for three rounds; the
-work was correct anyway, and that is worth recording as such.
+Note the external reviewer offered two designs, "install an `EXIT` trap
+immediately after creating the file, **or** supply the key without writing it
+into the checkout". agy built the first and codex ruled that only the second is
+sufficient on a self-hosted runner. **The peer review was right and the
+external review's first option was not good enough for this repo.** That is
+the pre-integration layer doing exactly what it exists for.
 
-### A standard was being applied asymmetrically, and this run fixed it
+Three withholds on one workflow file is a lot of passes. It was not a loop:
+each round was strictly narrower than the last and each ended with a concrete
+prescribed construction rather than an objection. The orchestrator's fourth
+dispatch said so explicitly, telling codex the bar was whether key material can
+be stranded and not whether the workflow could be tidier.
 
-codex-worker made `git diff --check` clean a **Tier 1 blocking** requirement for
-the delivery slice, which sat on six trailing-whitespace errors. Nobody ran the
-same check on skills, which had **55**, all blank lines carrying indentation,
-most of them inbound with `41909bb`.
+### Both regression tests were verified against unfixed code, one by the orchestrator
 
-That is a reviewer-imposed standard, not a `CLAUDE.md` rule, and applying it to
-one slice and not another is the referee's problem rather than either doer's.
-Ruling: apply it symmetrically. A whitespace-only fix was dispatched to
-agy-worker on `agy/r3-skills`. If a future round wants this as a repo-wide rule
-it needs its own authorization; it is not one today.
+The standing problem with a "regression test" is that it can pass on the code
+it was supposed to catch. Both were checked.
 
-### Record 010: verbatim artifacts are exempt from the dash rule
+claude-worker, reviewing finding 1, exported `e73bad5` and ran codex's new test
+against it. It reproduced **both halves** of the finding independently: the
+terminal row is never written (`['attempt'] != ['attempt', 'cancelled']`) and,
+after patching out the audit assertion, the lease is never released
+(`32960 != 0`, exactly one `CALL_RESERVATION_BYTES`). The ratchet in the
+finding is real, not theoretical.
 
-The first of the two repo-level items the last run left for an orchestrator
-ruling is **CLOSED**. `docs/decisions/010-verbatim-artifacts-exempt-from-the-dash-rule.md`.
+agy-worker's sign-off on finding 3 claimed the same kind of verification, and
+**the orchestrator ran it independently** rather than taking the report, per
+this file's standing practice for that seat:
 
-The en-dashes are in the cursor critic's tiebreaking vote, recorded verbatim, in
-two files (`.team/votes/r3-critic-skills.md` and the round-branch copy under
-`docs/proposals/2/ballots/`). The no-em-dash rule governs authored prose; a
-transcription is evidence and is not edited. **No file was changed.** The critic
-seat exists to check the orchestrator's bias, and an orchestrator that edits the
-text of the vote which overruled it has a seat that does nothing.
+    AssertionError: 10485760 not less than or equal to 8454144
 
-Reviewers should use the excluded form:
+The test asserts on peak accumulation, not on the exception. That distinction
+is load-bearing: the pre-fix code raises the *same* `ResultCapExceeded` while
+having already buffered the whole body, so a test asserting only on the raise
+would have passed against unfixed code and proven nothing. The claim holds.
 
-    git grep -nP '[\x{2014}\x{2013}]' -- . \
-      ':!docs/proposals/*/ballots/*' ':!.team/votes/'
+### One known gap, deliberately not fixed, do not lose it
 
-**The trailing `*` is load-bearing and this was verified, not assumed.** The
-directory form `':!docs/proposals/*/ballots/'` silently excludes nothing and the
-grep still fails. A reviewer who reports this finding again should be pointed at
-record 010 rather than re-litigating it.
+claude-worker found it while reviewing finding 1 and declined to withhold
+sign-off over it, correctly. Recording it here so it survives.
 
-### The second repo-level item is CLOSED by delivery
+**A handler raising a `BaseException` that is not `CancelledError` still leaks
+the lease.** Confirmed against the fixed code with both a custom
+`BaseException` subclass and a `KeyboardInterrupt`: rows `['attempt']`,
+`reserved: 32960` in each case. Finalization is keyed on
+`except asyncio.CancelledError` rather than `except BaseException`.
 
-`pyproject.toml` is present at `5bd75c6` in the added-file set. Confirming
-whether a bare `pytest` now collects from the repo root without `PYTHONPATH=src`
-is claim 10 of the delivery re-review; CI runs the literal command, so read that
-answer rather than assuming.
+Why it is not a blocker: the realistic members of that set,
+`KeyboardInterrupt` and `SystemExit`, end the process, which takes the
+process-local reservation with it. The gap is pre-existing rather than
+introduced by the fix, and it sits outside the finding the commit was
+dispatched to close. Widening the clause to `except BaseException` with an
+unconditional re-raise closes it in a few lines. **Worth a later slice.**
 
-### Dispatch mechanics: two failures worth not repeating
+A second, smaller one from the same review: under a second `cancel()` arriving
+while the terminal audit write is suspended, the terminal row is lost but the
+lease is still released, so the ratchet stays closed. The lost row is covered
+by the `AuditRepository` reconciliation contract, which closes attempts lacking
+a terminal record as `outcome_unknown` and never infers success.
 
-- **`roles/agy-worker.md` as a relative path fails.** The role briefs live in
-  the framework (`$TEAM_FRAMEWORK_DIR/roles/`), not in this repo, and this repo
-  has no `roles/` directory. Both first-attempt fix dispatches died instantly
-  with `dispatch.sh: role-brief file not found`. **Always pass
-  `$TEAM_FRAMEWORK_DIR/roles/<seat>.md` absolute.** The brief warns about
-  exactly this class of path error; this is a second instance of it.
-- **The failure was invisible in the exit code and visible in the markers.**
-  Both dispatches returned exit 0. What gave it away was that no start marker
-  existed. Check the markers, every time.
+### Protected paths: no new decision record was needed
 
-Round branch head before this run: `01d6250`, 103 passed / 13 deselected /
-69 subtests.
+Findings 1 and 3 both touch `src/vcf_ops_mcp/`, which is protected.
+claude-worker checked this properly: `tools/consensus-check.py` passes against
+a PR body naming `docs/decisions/009-phase1-build-synthesis.md`, which is
+accepted, principal-approved, signed by all three doers, and already names
+`src/vcf_ops_mcp/` as in scope. These are defect fixes inside that record's
+scope, not new architectural decisions. `AuditStatus.CANCELLED` is additive to
+a `StrEnum` with no ordinal dependency, no exhaustive dispatch anywhere in
+`src/`, and no concrete `AuditRepository` yet, so nothing needs migrating.
 
-### Final slice status, round 3: all four signed
+Finding 2 touches only `.github/workflows/`, which is not protected.
+
+### Resolved blocked markers that were deliberately not merged
+
+Four blocked markers were written during this run and **none of them are in
+the round branch**, because every one is resolved and a resolved block sitting
+in `.team/blocked/` reads as an open one.
+
+- `agy-worker-20260726T014226Z` on `agy/r3-fix-deploykey` at `d7deee2`, asking
+  the orchestrator to name a reviewer. It was answered by the dispatch of the
+  review itself. Only the fix commit `106a317` was carried forward.
+- Three from codex-worker recording the withheld sign-offs, at `74f5364`,
+  `6a9430b`, and `7f1d3ff`. Their substance is quoted above, which is where it
+  belongs, since these are review findings rather than decision-record
+  artifacts and no record cites their SHAs.
+
+### The `origin/main` conflict, and why it recurs
+
+PR #3 went `CONFLICTING` between runs because `main` advanced with two
+orchestrator state commits (`d84b1d7`, `ca5f0dc`) while the round branch held
+an older `TEAM-STATE.md`. Only `TEAM-STATE.md` conflicted; nothing else in
+21,000 lines of diff did. Resolved by merging `origin/main` into the round
+branch and rewriting the head section, which is this text.
+
+**This will happen on every round** as long as orchestrator state commits go
+straight to `main` while a round branch is open. It is cheap to resolve and the
+file is orchestrator-owned, so no worker is ever blocked by it. Merge
+`origin/main` into the round branch before opening the PR, not after.
+
+### Dispatch mechanics: still true, still worth not repeating
+
+- **`roles/<seat>.md` as a relative path fails.** The briefs live in
+  `$TEAM_FRAMEWORK_DIR/roles/`, not in this repo. Always pass the absolute
+  path. This run did and had no dispatch failures.
+- **Exit codes are worthless; read the end markers.** All seven dispatches this
+  run returned 0. Verification came from `branch_sha_before` versus
+  `branch_sha_after` and `uncommitted_work` in each end marker, then from the
+  tree itself.
+- **The end marker can lag the dispatcher's return by a second or two.** Two
+  checks this run reported "NO END MARKER" against a marker that existed
+  moments later. `sleep 3` before globbing, and do not conclude a dispatch
+  failed on a first miss.
+- **agy-worker's short dispatches remain worth spot-checking.** Its 1m00s
+  review of finding 3 was correct on every point, verified independently. Four
+  rounds of flagging this seat, four rounds of the work being fine.
+
+### Final slice status, round 3
 
 | Slice | Owner | Reviewer | Signed SHA | Integrated |
 | --- | --- | --- | --- | --- |
 | spine | codex-worker | claude-worker | `cd08783` | yes |
 | read plane | claude-worker | agy-worker | `7f942f7` | yes |
-| delivery | agy-worker | codex-worker | `5bd75c6` | yes, this run |
-| skills | agy-worker | claude-worker | `6ffe808` | yes, this run |
-
-No resident reviewed its own work. Every slice merged at its reviewed SHA
-without rebase, so each marker still names the exact commit it covers.
-
-**Suite on the fully integrated round branch, run by the orchestrator with the
-literal CI command after `pip install -e .[test]`: 124 passed, 13 skipped (the
-opt-in live tier), 69 subtests.**
+| delivery | agy-worker | codex-worker | `5bd75c6` | yes |
+| skills | agy-worker | claude-worker | `6ffe808` | yes |
+| ext. review 1, cancel | codex-worker | claude-worker | `59f5c2e` | yes, this run |
+| ext. review 2, deploy key | agy-worker | codex-worker | `3a58ba7` | yes, this run |
+| ext. review 3, stream cap | claude-worker | agy-worker | `e88f4c1` | yes, this run |
 
 ### The suite command matters, and a bare `pytest` is not it
 
-This bit two separate checks this run and is worth stating once, plainly.
-
-`pyproject.toml` landing with the delivery slice does **not** by itself make a
-bare ambient `pytest` work: codex-worker confirmed that an ambient `pytest`
-without `PYTHONPATH` collects zero tests and reports four
-`ModuleNotFoundError: No module named 'vcf_ops_mcp'`. **CI is fine, because CI
-runs `pip install -e .[test]` first**, and after that the literal `pytest tests/`
-passes. The orchestrator reproduced CI exactly (fresh venv, editable install,
-literal command) rather than trusting either the reviewer's `uv run` invocation
-or a bare local run.
-
-The related trap: `uv run --no-project --with ... pytest` works in a worktree
-that has a `.venv` and fails in one that does not, because `pytest` itself
-resolves outside the ephemeral env. That produced a `ModuleNotFoundError` on the
-integrated round branch that looked exactly like an integration failure and was
-not one. **Check the environment before bouncing an integration failure to a
-doer.**
+An ambient `pytest` without an editable install collects zero tests and reports
+errors that look like failures. codex-worker hit this again this run and
+correctly diagnosed it as environment setup rather than a test failure. The
+orchestrator's own integration run used `git archive` to `/tmp`, a fresh venv,
+`pip install -e .[test]`, then `pytest tests/`. Use that.
 
 ### Provenance is recorded, so the branches are safe to delete
 
@@ -191,6 +228,22 @@ Note that agy-worker's proposal is at `phase1-proposal.md` in the **repo root**
 at `f136b2a`, not under `docs/proposals/`; it ignored the convention that round
 and the recording had to account for it.
 
+The seven fix and review branches this run created cite no SHAs from any
+decision record, so they need no artifact recording before deletion.
+
+### Record 010: verbatim artifacts are exempt from the dash rule
+
+`docs/decisions/010-verbatim-artifacts-exempt-from-the-dash-rule.md`. The
+en-dashes are in the cursor critic's tiebreaking vote, recorded verbatim. A
+transcription is evidence and is not edited. Reviewers should use the excluded
+form, and **the trailing `*` is load-bearing**:
+
+    git grep -nP '[\x{2014}\x{2013}]' -- . \
+      ':!docs/proposals/*/ballots/*' ':!.team/votes/'
+
+A reviewer who reports this again should be pointed at record 010 rather than
+re-litigating it.
+
 ### The framework writes an em-dash into this repo
 
 `bin/team-provenance-ledger` writes `.team/provenance.md`'s header with an
@@ -201,9 +254,24 @@ whoever next touches the framework, not to this project's round.
 
 ### Untracked orchestrator markers in the primary checkout
 
-22 `.team/markers/` files sit untracked in the primary checkout and predate this
-run. They are deliberately not committed and are not in the PR. `gh pr create`
-warns about them; the warning is expected and is not a problem.
+Orchestrator `.team/markers/` files sit untracked in the primary checkout and
+predate this run. They are deliberately not committed and are not in the PR.
+`gh pr create` warns about them; the warning is expected and is not a problem.
+
+### The fleet-caddy blocker is still open and still not blocking
+
+`.team/blocked/fleet-caddy-slot-config.md`. Per-slot config is missing on
+docker.int, relayed to lab-admin 2026-07-25 (PKA request `e91b47d2`). The
+`Build & Deploy` job skips correctly because of it. Nothing in the round
+depends on it. Do not wait on it.
+
+---
+
+## Historical, superseded by the sections above
+
+Everything below this line describes earlier runs of round 3 and is retained
+for the audit trail. Where it conflicts with the sections above, the sections
+above win.
 
 ### THE NEXT RUN STARTS HERE, read this first
 

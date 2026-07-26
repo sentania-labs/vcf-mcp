@@ -1,0 +1,36 @@
+{
+  "current": {
+    "actions-how-to": "1.0.0",
+    "metrics-query-patterns": "1.0.0",
+    "suite-api-auth-walkthrough": "1.0.0"
+  },
+  "skills": [
+    {
+      "content_sha256": "9cd473abf3fbb8de80874d4e986aba5f5ff48aaa71104f050159e21aa8bb3a6c",
+      "maturity": "seed",
+      "slug": "actions-how-to",
+      "source_provenance": "vcf-ops-mcp round 3",
+      "summary": "How to execute VCF Ops actions with plan-then-apply.",
+      "title": "Actions How-to",
+      "version": "1.0.0"
+    },
+    {
+      "content_sha256": "7cd7d077b5f114138d612ecdba8096cda3ec6ec623175e668dd39509ed3e073b",
+      "maturity": "seed",
+      "slug": "metrics-query-patterns",
+      "source_provenance": "vcf-ops-mcp round 3",
+      "summary": "Patterns for querying metrics and super metrics.",
+      "title": "Metrics Query Patterns",
+      "version": "1.0.0"
+    },
+    {
+      "content_sha256": "99e82c016ee3db96011a90056b16c8125ecdcb8d7dffe18d6b6592f7e500b258",
+      "maturity": "placeholder",
+      "slug": "suite-api-auth-walkthrough",
+      "source_provenance": "vcf-ops-mcp round 3",
+      "summary": "Placeholder for future suite-api auth flow.",
+      "title": "Suite-API Auth Walkthrough",
+      "version": "1.0.0"
+    }
+  ]
+}

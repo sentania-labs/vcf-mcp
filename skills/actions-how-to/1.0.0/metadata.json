@@ -1,0 +1,6 @@
+{
+  "title": "Actions How-to",
+  "summary": "How to execute VCF Ops actions with plan-then-apply.",
+  "maturity": "seed",
+  "source_provenance": "vcf-ops-mcp round 3"
+}

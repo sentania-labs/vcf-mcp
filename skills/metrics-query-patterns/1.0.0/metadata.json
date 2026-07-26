@@ -1,0 +1,6 @@
+{
+  "title": "Metrics Query Patterns",
+  "summary": "Patterns for querying metrics and super metrics.",
+  "maturity": "seed",
+  "source_provenance": "vcf-ops-mcp round 3"
+}

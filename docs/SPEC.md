@@ -76,12 +76,14 @@ listener behind fleet-caddy TLS:
     invisible to clients
   - inventory/resources: adapter kinds, resource kinds, resource query
   - metrics: stats/latest queries, super metrics
-  - alerts: alerts, symptoms, acknowledge (acknowledge counts as an
-    action for gating purposes)
+  - alerts: alerts, symptoms
   - reports: list/run/download
   - actions: list actiondefinitions, populate/validate parameters for a
     target resource, plan (dry summary of what would run), apply
     (execute), poll task status
+- Alerts are read-only in the MVP. The API has no acknowledge verb, and
+  the nearest substitute, `cancel`, closes an alert outright with a wider
+  blast radius than the original wording implied.
 - Static core tools vs dynamic generation from the live action catalog
   (or a hybrid) is a round-1 architecture decision.
 

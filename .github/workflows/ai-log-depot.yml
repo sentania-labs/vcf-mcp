@@ -1,0 +1,114 @@
+name: ai-log-depot
+
+on:
+  push:
+    branches: [ "main", "round/*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: CI Pipeline
+    runs-on: [self-hosted]
+    if: github.repository == 'sentania-labs/vcf-ops-mcp' # fork-gated
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip hatchling
+          pip install -e .[test]
+
+      - name: Run Lint (Incomplete)
+        run: echo "Linting step not yet implemented"
+
+      - name: Run Tier 1 and 2 Tests
+        run: pytest tests/
+
+      - name: Run Fixture Scanner (Incomplete)
+        run: echo "Fixture scanner step not yet implemented"
+
+      - name: Fixture Freshness Check (Incomplete)
+        run: echo "Fixture freshness step not yet implemented"
+
+      - name: Skills Index Check (Incomplete)
+        run: echo "Skills index step not yet implemented"
+
+  deploy:
+    name: Build & Deploy
+    needs: test
+    runs-on: [self-hosted]
+    if: github.ref == 'refs/heads/main' && github.repository == 'sentania-labs/vcf-ops-mcp'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/sentania-labs/vcf-ops-mcp:${{ github.sha }}
+
+      - name: Deploy to slot and verify health
+        env:
+          DEPLOY_KEY: ${{ secrets.DOCKER_INT_DEPLOY_KEY }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          SERVICE_URL: ${{ secrets.SERVICE_URL }}
+        run: |
+          # The ai-log-depot standard for the lab-container-host multi-tenant slot model.
+          # We deploy using the onboarded slot's forced-command key.
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set and nonempty}"
+          KEY_PATH="$RUNNER_TEMP/deploy_key"
+          trap 'rm -f -- "$KEY_PATH"' EXIT
+          install -m 600 /dev/null "$KEY_PATH"
+          echo "$DEPLOY_KEY" > "$KEY_PATH"
+
+          # Capture prior digest before deploy
+          echo "Capturing prior digest..."
+          PREV_DIGEST=$(ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no deploy@$DEPLOY_HOST vcf-ops-mcp get-digest || echo "none")
+          echo "Prior digest: $PREV_DIGEST"
+
+          # SSH to trigger the deploy script. The script takes the new digest.
+          # Note: volume mounts are preserved explicitly by the fleet-caddy per-slot configuration.
+          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no deploy@$DEPLOY_HOST vcf-ops-mcp ghcr.io/sentania-labs/vcf-ops-mcp@${IMAGE_DIGEST}
+
+          echo "Waiting for service to become healthy..."
+          HEALTHY=0
+          for i in {1..12}; do
+            if curl -k -f -s $SERVICE_URL/healthz; then
+              echo "Health check passed!"
+              HEALTHY=1
+              break
+            fi
+            sleep 5
+          done
+
+          if [ $HEALTHY -eq 0 ]; then
+            echo "Health check failed. Rolling back to previous digest..."
+            if [ "$PREV_DIGEST" != "none" ] && [ -n "$PREV_DIGEST" ]; then
+              ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no deploy@$DEPLOY_HOST vcf-ops-mcp ghcr.io/sentania-labs/vcf-ops-mcp@${PREV_DIGEST}
+            else
+              echo "No prior digest found to roll back to."
+            fi
+            exit 1
+          fi
+
+          exit 0
