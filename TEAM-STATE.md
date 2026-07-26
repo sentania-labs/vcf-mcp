@@ -27,7 +27,13 @@ external Codex review, which is the last gate before merge.**
 3. **Then the branch and PR sweep**, which for the first time this round should
    expect zero retained branches.
 
-Round PR: **one squashed commit, 124 files.** Checks at open: CI Pipeline pass,
+Round PR head is **two commits**: the squash (124 files) plus one
+bookkeeping commit syncing `TEAM-STATE.md` with `main`. That second commit
+exists because squash-merging the first alone would have overwritten `main`'s
+orchestrator state with the older copy captured at squash time. **Do not
+re-squash**; follow-up commits on an open PR are sanctioned.
+
+Original squash: Checks at open: CI Pipeline pass,
 consensus gate pass, constitution and decision-record conventions pass, Build &
 Deploy skipping (correctly, it is the deploy job and the fleet-caddy slot is
 still blocked).
