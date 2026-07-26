@@ -6,32 +6,404 @@ update it before exiting. This is machinery, not a human changelog.
 ## Current assignment
 
 **Round:** 3, the Phase 1 build (first real code round)
-**Orchestrator run:** `gh-issue-2-execution-20260724-215456` (execution run;
-supersedes the triage run's state below)
-**Status:** **APPROVED and building. Record 009 is signed by all three doers and
-the consensus gate is green. Workplan step 0 (both day-one spikes) is COMPLETE.
-Step 1, `contracts.py`, is the next dispatch and nothing blocks it.**
+**Orchestrator run:** `gh-issue-2-execution-20260726-011017` (execution run;
+supersedes every earlier run's state in this file)
+**Status:** **ROUND PR OPEN AND GREEN. All four slices are signed and
+integrated. `https://github.com/sentania-labs/vcf-ops-mcp/pull/3` awaits the
+external Codex review, which is the last gate before merge.**
 
-Still no slice code, by design: step 0 ran first because either spike could
-reorder the build. One of them did.
+### THE NEXT RUN STARTS HERE
+
+1. **Read the external Codex review on PR #3 and address its findings in that
+   same PR.** The constitution requires this before merge, and the sentania-labs
+   convention is one review round, no re-review loops. `chatgpt-codex-connector`
+   reviews automatically on PR open; it did so on PR #1 with no triggering
+   comment. If no review has appeared, wait for it rather than merging.
+   **Route every substantive finding to its owning doer** and integrate the
+   resulting signed commits locally. Follow-up commits on an already-open PR are
+   the sanctioned exception to the squash rule: do **not** re-squash mid-review.
+2. **Then merge PR #3** and delete the round branch and all doer branches, and
+   write the `.review-passed` marker **straight to `main`, never as its own PR**.
+3. **Then the branch and PR sweep**, which for the first time this round should
+   expect zero retained branches.
+
+Round PR: **one squashed commit, 124 files.** Checks at open: CI Pipeline pass,
+consensus gate pass, constitution and decision-record conventions pass, Build &
+Deploy skipping (correctly, it is the deploy job and the fleet-caddy slot is
+still blocked).
+
+### Assignment premise correction, read this before anything else
+
+This run's assignment (the GitHub-issue pipeline manual continuation, authored
+2026-07-25) states the next step as "dispatch contracts.py, then the three
+slices in parallel". **That is stale and was not followed.** `contracts.py`
+landed at `8806063` and integrated at `522218e`; all four slices are built; two
+were already signed and integrated. The assignment's own governing sentence is
+"continue the Phase 1 build exactly where TEAM-STATE says", so TEAM-STATE was
+treated as the authority and the parenthetical as an echo of an issue comment
+the work had already overtaken.
+
+This was **not** written up as a blocked marker, and the reasoning is recorded
+here deliberately so a later run can disagree with it: the assignment's
+stop-and-block instruction is aimed at a contradicted *premise*, and the premise
+(Scott approved, record 009 signed, spikes done, build proceeds) is true in
+every particular. Only the step pointer was stale, and the assignment itself was
+written to correct exactly that class of staleness. Blocking would have stalled
+a round that was two mechanical fixes from its PR.
+
+### What this run did
+
+1. **Record 010**, the dash-rule ruling (see below). Committed at `a61fbcf`.
+2. **Delivery fix** dispatched to agy-worker, `11b0227` to `5bd75c6`. Both Tier
+   1 items closed and **verified by the orchestrator**.
+3. **Skills fix** dispatched to agy-worker, `88530b3` to `ed8eabb`. The one open
+   item closed and **verified by mutation**, see below.
+4. **Skills whitespace** dispatched, for symmetry of standard (see below).
+5. **Delivery re-review** dispatched to codex-worker at `5bd75c6`.
+
+### The skills sort guarantee: verified by the orchestrator, not on report
+
+claude-worker's held item was that `test_build_index_data_is_sorted` could not
+detect deletion of the sort. agy-worker took the reviewer's stated preference
+(monkeypatch `Path.iterdir` to yield reverse order). The orchestrator ran the
+mutation itself on a `git archive` export under `/tmp`:
+
+    # sort at skills.py:217 commented out
+    FAILED tests/test_skills.py::test_build_index_data_is_sorted
+    1 failed, 7 passed
+    # restored
+    8 passed
+
+The guarantee now holds. This was checked because the dispatch was 77 seconds
+and this file has flagged that seat's short dispatches for three rounds; the
+work was correct anyway, and that is worth recording as such.
+
+### A standard was being applied asymmetrically, and this run fixed it
+
+codex-worker made `git diff --check` clean a **Tier 1 blocking** requirement for
+the delivery slice, which sat on six trailing-whitespace errors. Nobody ran the
+same check on skills, which had **55**, all blank lines carrying indentation,
+most of them inbound with `41909bb`.
+
+That is a reviewer-imposed standard, not a `CLAUDE.md` rule, and applying it to
+one slice and not another is the referee's problem rather than either doer's.
+Ruling: apply it symmetrically. A whitespace-only fix was dispatched to
+agy-worker on `agy/r3-skills`. If a future round wants this as a repo-wide rule
+it needs its own authorization; it is not one today.
+
+### Record 010: verbatim artifacts are exempt from the dash rule
+
+The first of the two repo-level items the last run left for an orchestrator
+ruling is **CLOSED**. `docs/decisions/010-verbatim-artifacts-exempt-from-the-dash-rule.md`.
+
+The en-dashes are in the cursor critic's tiebreaking vote, recorded verbatim, in
+two files (`.team/votes/r3-critic-skills.md` and the round-branch copy under
+`docs/proposals/2/ballots/`). The no-em-dash rule governs authored prose; a
+transcription is evidence and is not edited. **No file was changed.** The critic
+seat exists to check the orchestrator's bias, and an orchestrator that edits the
+text of the vote which overruled it has a seat that does nothing.
+
+Reviewers should use the excluded form:
+
+    git grep -nP '[\x{2014}\x{2013}]' -- . \
+      ':!docs/proposals/*/ballots/*' ':!.team/votes/'
+
+**The trailing `*` is load-bearing and this was verified, not assumed.** The
+directory form `':!docs/proposals/*/ballots/'` silently excludes nothing and the
+grep still fails. A reviewer who reports this finding again should be pointed at
+record 010 rather than re-litigating it.
+
+### The second repo-level item is CLOSED by delivery
+
+`pyproject.toml` is present at `5bd75c6` in the added-file set. Confirming
+whether a bare `pytest` now collects from the repo root without `PYTHONPATH=src`
+is claim 10 of the delivery re-review; CI runs the literal command, so read that
+answer rather than assuming.
+
+### Dispatch mechanics: two failures worth not repeating
+
+- **`roles/agy-worker.md` as a relative path fails.** The role briefs live in
+  the framework (`$TEAM_FRAMEWORK_DIR/roles/`), not in this repo, and this repo
+  has no `roles/` directory. Both first-attempt fix dispatches died instantly
+  with `dispatch.sh: role-brief file not found`. **Always pass
+  `$TEAM_FRAMEWORK_DIR/roles/<seat>.md` absolute.** The brief warns about
+  exactly this class of path error; this is a second instance of it.
+- **The failure was invisible in the exit code and visible in the markers.**
+  Both dispatches returned exit 0. What gave it away was that no start marker
+  existed. Check the markers, every time.
+
+Round branch head before this run: `01d6250`, 103 passed / 13 deselected /
+69 subtests.
+
+### Final slice status, round 3: all four signed
+
+| Slice | Owner | Reviewer | Signed SHA | Integrated |
+| --- | --- | --- | --- | --- |
+| spine | codex-worker | claude-worker | `cd08783` | yes |
+| read plane | claude-worker | agy-worker | `7f942f7` | yes |
+| delivery | agy-worker | codex-worker | `5bd75c6` | yes, this run |
+| skills | agy-worker | claude-worker | `6ffe808` | yes, this run |
+
+No resident reviewed its own work. Every slice merged at its reviewed SHA
+without rebase, so each marker still names the exact commit it covers.
+
+**Suite on the fully integrated round branch, run by the orchestrator with the
+literal CI command after `pip install -e .[test]`: 124 passed, 13 skipped (the
+opt-in live tier), 69 subtests.**
+
+### The suite command matters, and a bare `pytest` is not it
+
+This bit two separate checks this run and is worth stating once, plainly.
+
+`pyproject.toml` landing with the delivery slice does **not** by itself make a
+bare ambient `pytest` work: codex-worker confirmed that an ambient `pytest`
+without `PYTHONPATH` collects zero tests and reports four
+`ModuleNotFoundError: No module named 'vcf_ops_mcp'`. **CI is fine, because CI
+runs `pip install -e .[test]` first**, and after that the literal `pytest tests/`
+passes. The orchestrator reproduced CI exactly (fresh venv, editable install,
+literal command) rather than trusting either the reviewer's `uv run` invocation
+or a bare local run.
+
+The related trap: `uv run --no-project --with ... pytest` works in a worktree
+that has a `.venv` and fails in one that does not, because `pytest` itself
+resolves outside the ephemeral env. That produced a `ModuleNotFoundError` on the
+integrated round branch that looked exactly like an integration failure and was
+not one. **Check the environment before bouncing an integration failure to a
+doer.**
+
+### Provenance is recorded, so the branches are safe to delete
+
+Record 009 cites 17 SHAs. Sixteen documents (three proposals, three critiques,
+three complete Q7 ballots, three superseded Q1-Q6 ballot heads, three
+signatures, and codex-worker's withholding) are copied in-tree under
+`docs/artifacts/round-3/` with provenance headers, each joined to its cited SHA
+by a row in `.team/provenance.md`. This was done **before** any branch deletion,
+per the convention. The seventeenth is the round branch's own commit, already in
+the tree.
+
+Note that agy-worker's proposal is at `phase1-proposal.md` in the **repo root**
+at `f136b2a`, not under `docs/proposals/`; it ignored the convention that round
+and the recording had to account for it.
+
+### The framework writes an em-dash into this repo
+
+`bin/team-provenance-ledger` writes `.team/provenance.md`'s header with an
+em-dash on first use, violating this repo's hard rule. Corrected by hand at
+`493aaac`; the tool only appends rows afterward, so the fix is stable. **Fixing
+it upstream in the framework is a real but non-blocking item** and belongs to
+whoever next touches the framework, not to this project's round.
+
+### Untracked orchestrator markers in the primary checkout
+
+22 `.team/markers/` files sit untracked in the primary checkout and predate this
+run. They are deliberately not committed and are not in the PR. `gh pr create`
+warns about them; the warning is expected and is not a problem.
 
 ### THE NEXT RUN STARTS HERE, read this first
 
-1. **Dispatch `contracts.py` to codex-worker** (workplan step 1, one short
-   commit, the only planned serialization point). It must carry, per record 009
-   Amendment 2 ruling 2, a **target-configuration-generation and
-   client-invalidation protocol**, which claude-worker found missing and
-   codex-worker accepted. Build it against spike 001's stated dispatcher
-   contract, which is written out in that spike's "Dispatcher consequence"
-   section.
-2. **Then dispatch the four slices in parallel** per record 009 decision 6:
-   codex spine, claude read plane, agy delivery, agy skills (skills carries the
-   critic's binding rider: distinct item, distinct review, non-blocking
-   relative to the Gate 1 deploy).
-3. **The two spike branches are NOT merged and owe peer sign-off markers.** See
-   "Owed" below. Do this before or with the next integration, not later.
-4. **Do not re-run spike 002** until the fleet-caddy blocker clears. Watch for
-   the principal's answer on issue #2.
+**Two slices remain unsigned and each needs one short fix dispatch, then one
+short re-review. Both worklists are exact and small.** The spine and the read
+plane are both signed and integrated; the round branch is green at 103 tests.
+
+1. **`agy/r3-delivery` at `11b0227`, re-reviewed by codex-worker,
+   changes-requested. Two Tier 1 items block it, both mechanical.**
+   - **Restore eleven files the cleanup deleted that predate this slice.** The
+     removal of the 45 slice-local artifacts was correct and must stay. These
+     eleven existed at `33bca5d` and are not this slice's to delete: six
+     `.team/markers/orchestrator-run-20260720-*` files, four
+     `.team/markers/stale/*DUPLICATE*` files, and
+     `.team/markers/vom-r2-esc-20260721-171423-start.md`. The exact list is in
+     the marker.
+   - **Six trailing-whitespace errors** from `git diff --check 19efb0c..11b0227`,
+     including `src/vcf_ops_mcp/app.py:60` and `tests/test_admin.py:23`.
+
+   Tier 1 items 2, 3, and 5 are CLOSED: the lab FQDNs are out of the workflow
+   and into `DEPLOY_HOST` / `SERVICE_URL` Actions secrets; `post_login` now
+   returns an explicit 501 and `create_app` raises `RuntimeError` without
+   `SESSION_SECRET`, so both literals are gone and the fail-closed alternative
+   is the allowed one; and the runner model is pinned. Volume declarations are
+   CLOSED. Six Tier 2 items are PARTIALLY CLOSED and are the next increment's
+   worklist; the marker states each one's remainder.
+
+2. **`agy/r3-skills` at `88530b3`, re-reviewed by claude-worker,
+   changes-requested on exactly one item.** Blocking items 1 and 3 are CLOSED
+   and nothing regressed. Item 2's **sort is correct and proven**; its **test
+   does not hold the guarantee**. claude-worker deleted the sort line and the
+   suite stayed 8 of 8 green, because the two-entry fixture (`z-skill`,
+   `a-skill`) comes back from readdir already sorted on this filesystem, so the
+   assertion cannot distinguish sorted output from readdir output. The fix it
+   asked for: build enough slugs that readdir demonstrably scrambles (twelve
+   worked), then assert both that the generated slugs are sorted **and** that
+   the raw `iterdir()` order was not already sorted, so the test fails loudly if
+   the fixture stops scrambling rather than passing for the wrong reason.
+
+3. **Reuse the review worktrees and branches.** `-rev-claude`
+   (`claude/r3-rev-spine`), `-rev-claude2` (`claude/r3-rev-skills`), `-rev-agy`
+   (`agy/r3-rev-readplane`), `-rev-codex` (`codex/r3-rev-delivery`), under
+   `/home/scott/foundry/projects/.worktrees/vcf-ops-mcp-`. All are merged into
+   the round branch; reset each to the round head and reuse it. Pass the
+   author's worktree as `--add-dir` so the reviewer can run tests read-only
+   where the slice is checked out, and let it commit its marker in its own.
+   Rotation holds: codex reviews delivery, claude reviews skills.
+
+4. **Then the round PR.** Once delivery and skills are signed and integrated
+   green, the round branch is complete: contracts, both spikes, and all four
+   slices. Squash to one commit naming the round and record 009 with a
+   `Co-authored-by:` trailer per doer, run `bin/team-record-artifact` and
+   `bin/team-provenance-ledger` for every proposal, critique, and ballot SHA
+   record 009 cites **before** deleting any branch, then open the single round
+   PR referencing issue #2.
+
+5. **Two repo-level items need an orchestrator ruling, neither is a doer's.**
+   - **An en-dash in `docs/proposals/2/ballots/critic-r3-skills-ownership-vote.md:8`**
+     makes the repo-wide `git grep -nP '[\x{2014}\x{2013}]'` fail at the
+     repository baseline. Found independently by two reviewers. It is inside the
+     **critic's vote, recorded verbatim**. The no-em-dash rule is a hard repo
+     rule; recording a vote verbatim is also a hard rule, and they conflict.
+     Do not quietly edit a verbatim quotation. A marked bracketed transcription
+     note is probably right, but it is a ruling, so make it explicitly and
+     record it.
+   - **No `pyproject.toml`, `conftest.py`, or `pytest.ini` on the round branch**
+     at the time of review, so a bare `pytest` failed collection with
+     `ModuleNotFoundError: No module named 'vcf_ops_mcp'`. `agy/r3-delivery`
+     adds a `pyproject.toml`, so this closes when delivery integrates. Confirm
+     it lands, because CI runs the literal command.
+
+6. **Do not re-run spike 002** until the fleet-caddy blocker clears. Watch #2.
+
+7. **No PR is open and the round branch is still local.** Correct until item 4.
+
+### The peer-review round: what it found
+
+Four reviews, four end markers, all `branch_changed: yes`, none cap-expired,
+none with uncommitted work. Dispatched in parallel into four fresh review
+worktrees, 123 to 329 seconds each.
+
+| Slice | SHA reviewed | Reviewer | Result | Marker |
+| --- | --- | --- | --- | --- |
+| spine | `123d9fb` | claude-worker | changes-requested | `codex-r3-spine-123d9fb8bad9.md` |
+| read plane | `7f942f7` | agy-worker | **signed** | `claude-r3-readplane-7f942f789de7.md` |
+| delivery | `19efb0c` | codex-worker | changes-requested | `agy-r3-delivery-19efb0cdab60.md` |
+| skills | `41909bb` | claude-worker | changes-requested | `agy-r3-skills-41909bb8da77.md` |
+
+**The named-claims framing worked for a fourth consecutive round, and this time
+it caught a constitution violation.** Each prompt listed 7 to 10 specific claims
+to confirm or deny and said withholding was valid. Read the markers; they are
+327 to 409 lines each and cite file and line.
+
+The three findings that matter most:
+
+- **Spine: no denial produces an audit row.** claude-worker probed the real
+  dispatcher and got **zero** audit rows for revoked-key, empty-scope,
+  no-identity, unknown-tool, and non-JSON-args denials. `AuditStatus.DENIED` and
+  `TerminalState.DENIED` are defined in `contracts.py` and nothing produces
+  them, while the commit lists "request-local authorization, posture gating" as
+  Done. `CLAUDE.md` is unconditional: no tool path ships without its audit write,
+  and a denied call is a tool call. This is a direct invariant violation that
+  three prior artifacts (the commit message, the spike, the record) all read as
+  covered.
+- **Delivery: nine of ten claims denied, including three constitution items.**
+  Lab host and service FQDNs hard-coded in `.github/workflows/ai-log-depot.yml`;
+  a literal password `"admin"` in the login route and a fixed session secret
+  `"change_me_in_production_from_env_var"` in the production factory; and
+  **4,101 lines of unrelated material committed** (34 historical `.team/markers`
+  files, two `.patch` files, `diff.txt`, `log.txt`, nine `scratch/` proposal and
+  critique files). codex-worker's phrase for the pattern is the useful one and is
+  worth quoting to that seat again: the slice "introduces security-critical
+  placeholders that look operational". `/healthz` returns a plausible `0`
+  unreconciled count in the exact path the Dockerfile invokes.
+- **Skills: the auth walkthrough placeholder ships as a finished skill.** Its
+  metadata is byte-identical to the real skills in the `maturity` field, the
+  index lists it in `current` with a digest, and all four render paths serve a
+  body of `[SLOT: claude-worker auth walkthrough content]` under a summary
+  promising an auth flow. A model that calls it improvises an auth flow, which
+  for this skill means guessing at credentials. Also: the index generator emits
+  `Path.iterdir()` order and is not sorted, so a regenerate-and-diff CI check is
+  one skill away from spurious failure; it looks stable today only because
+  ext4's hash order for these three slugs happens to be alphabetical, which
+  claude-worker demonstrated with twelve slugs.
+
+### The read plane is signed, integrated, and the sign-off was verified
+
+`claude/r3-readplane` at `7f942f7` merged into the round branch at `d509199`,
+**without rebase**, so the reviewed SHA is preserved. 5506 lines, three commits,
+25 files. All 91 tests green on the integrated branch.
+
+**agy-worker's marker was independently verified by the orchestrator before the
+merge**, because a 123-second, 27-line sign-off on a 5506-line slice is exactly
+the pattern this file has flagged for two rounds. The result is worth recording
+precisely rather than by reputation:
+
+- **Every checkable claim in it resolves true.** All five named test functions
+  exist in `tests/test_vcf_client.py`; the fixture-generator negative control
+  exists at `test_vcf_fixture_generator.py:130`; `tests/live/guard.py` has
+  `PROD_FQDN`, an import-time `assert PROD_FQDN not in LIVE_HOST_ALLOWLIST`, and
+  the `refuse_outside_the_read_set` hook; `contracts.py` is untouched by the
+  branch. The suite was re-run by the orchestrator: 91 passed.
+- **One imprecision, not a defect.** Its claim 7 said the counts 517/1216/879/142
+  appear "only in comments or mock fixture string inputs". One appears inside an
+  `assertEqual` at `test_vcf_fixture_generator.py:289`. Read in context, that is
+  a scrubber round-trip test asserting a number in **synthetic input** survives
+  scrubbing, not a contract test asserting an appliance object count, so the
+  acceptance criterion holds and so does the substance of the claim.
+- **This is a genuine improvement on the last two rounds and should be recorded
+  as such.** The prompt named the depth pattern explicitly and asked for
+  calibration, and the marker came back citing specific test functions and files
+  rather than confirming items with no specifics. It is still the shortest review
+  of the round by a wide margin, on the second-largest slice, so keep naming it.
+  But it is checkable, and it checked out.
+
+### Two trailer defects: fixed before sign-off, and this ordering matters
+
+Both were amended by their own authors before any marker named a SHA, because a
+trailer fix rewrites the commit and a marker naming the old SHA would stop
+covering it.
+
+| Branch | Was | Now | New SHA |
+| --- | --- | --- | --- |
+| `codex/r3-spine` | `Codex <codex@team.local>` | `codex-worker <codex@team.local>` | `123d9fb8bad9d23b03c63fbda7f7dbe50ac50c08` |
+| `agy/r3-skills` | `Antigravity <agy@team.local>` | `agy-worker <agy@team.local>` | `41909bb8da77a97a1ada47301f45ab3379cbe3b0` |
+
+Both amends were message-only and verified: `git diff --stat <old> <new>` is
+empty for both. **Stating the exact expected trailer string in the prompt worked
+on the first attempt for both seats**, including the agy seat that had produced
+this defect two rounds running. Keep doing that.
+
+### Slice status after this run
+
+| Slice | Owner | Branch | SHA reviewed | Review | State |
+| --- | --- | --- | --- | --- | --- |
+| spine | codex-worker | `codex/r3-spine` | `cd08783` | **signed** | **integrated at `cc1007a`** |
+| read plane | claude-worker | `claude/r3-readplane` | `7f942f7` | **signed** | **integrated at `d509199`** |
+| delivery | agy-worker | `agy/r3-delivery` | `11b0227` | changes-requested | 2 mechanical Tier 1 items open |
+| skills | agy-worker | `agy/r3-skills` | `88530b3` | changes-requested | 1 item open, a test that does not hold its guarantee |
+
+Seven review markers are in the tree: four first-round and three re-review. The
+first-round `changes-requested` markers stay as the record of that round.
+
+**The spine's re-review is the round's best artifact.** claude-worker probed the
+real dispatcher again rather than reading the new tests, and confirmed all four
+of its blocking items closed, including the constitution one: denials now write
+audit rows. Signed at `cd08783`.
+
+**Two re-reviews found defects a reading review would have missed, both by
+mutation.** claude-worker deleted the skills sort line and watched the suite
+stay green, proving the new test could not distinguish sorted output from
+readdir order. codex-worker diffed the delivery cleanup against the pre-slice
+baseline and found it had deleted eleven files that predated the slice along
+with the 45 it was asked to remove. Neither is visible by reading the diff.
+
+The skills slice keeps the critic's binding rider (distinct workplan item,
+distinct review, non-blocking relative to the Gate 1 deploy). claude-worker
+confirmed the rider is intact structurally: the branch does not import from or
+depend on delivery.
+
+**claude-worker owes the suite-api auth walkthrough content**, per WORKPLAN:139,
+and said so unprompted in its skills review. The one fact it must carry, recorded
+here so it survives: the local auth source value the suite-api expects is
+`LOCAL`, not the admin picker's display label "Local Users", which produces a 401
+indistinguishable from a wrong password. The delivery slice has the same defect
+in its picker and it is item 6 of that redispatch.
 
 ### Step 0 spike results, both complete
 
@@ -62,11 +434,11 @@ proceeds.
 
 ### Owed by the next run, do not lose these
 
-- **Peer sign-off markers for both spike branches.** Neither is merged into the
-  round branch, deliberately: this run ran out of cap before it could dispatch a
-  review round, and merging without a marker would have violated the gate to
-  save five minutes. Each needs a marker from a non-author resident naming the
-  exact commit. Nothing is lost; both branches are retained on purpose.
+- **CLEARED 2026-07-25: peer sign-off markers for both spike branches.**
+  claude-worker reviewed and signed both at `71633c7`, and both spike branches
+  are now merged into the round branch (`e36ec7e`, `0481355`, `3b6e156`).
+  Markers: `.team/signoffs/codex-r3-spike-identity-6d00202f402d.md` and
+  `agy-r3-spike-transport-dbe11684f4dd.md`.
 - **A process error of this run, recorded so it is not repeated.** The agy spike
   dispatch was killed by the orchestrator's own tool timeout at 10 minutes, not
   by its cap and not by any worker fault. It had already committed `dbe1168`, so
@@ -436,6 +808,85 @@ On approval:
    The `src/core/` and `ARCHITECTURE.md` strings elsewhere in
    `consensus-check.py` are deliberate synthetic fixtures and must **not** be
    "fixed".
+
+## Sweep, round 3 PR-open (2026-07-26T01:3xZ)
+
+Run at the close of the PR-open run. **The round is not closed**: PR #3 is open
+awaiting the external Codex review, so the end-of-round expectation of zero
+branches does not apply yet. Everything below is retained on purpose.
+
+- **Open team PRs: one, #3.** That is the round PR and it is the correct state.
+  Green on every check. Awaiting external review.
+- **Doer-prefixed branches on `origin`: zero.** Guard run, passed, after the
+  round-branch push.
+- **Round branch on `origin`: present, and this is correct** for the first time
+  this round. It is the one sanctioned push, at PR-open time, per the brief.
+- **Process and artifact tags on `origin`: zero.** Unchanged. `git ls-remote
+  --tags origin` is empty.
+
+Local branches retained on purpose:
+
+| Branch | Why retained |
+| --- | --- |
+| `round/2-phase1-build` | the round PR head, squashed to one commit |
+| `round/2-phase1-build-preSquash` | the full pre-squash integration history, kept until PR #3 merges so every reviewed SHA stays trivially reachable. **Delete at round close.** |
+| `codex/r3-spine`, `claude/r3-readplane`, `agy/r3-delivery`, `agy/r3-skills` | the four signed slice heads; retained until PR #3 merges |
+| `claude/r3-rev-spine`, `agy/r3-rev-readplane`, `codex/r3-rev-delivery`, `claude/r3-rev-skills` | the nine review markers, all merged |
+| the phase-1/2/3 artifact and ballot branches | content now preserved in `docs/artifacts/round-3/`; **safe to delete at round close** |
+
+The pre-squash tree was verified byte-identical to the squashed commit
+(`git diff --stat` empty) before the push.
+
+## Sweep, round 3 slice review (2026-07-26T00:5xZ, mid-round)
+
+Run at the close of the slice-review run. **The round is not closed**: one slice
+is integrated and three are redispatched, so the end-of-round expectation of zero
+branches does not apply. Everything below is retained on purpose.
+
+- **Open team PRs: zero.** Correct. The round PR opens after all four slices are
+  signed and integrate green.
+- **Doer-prefixed branches on `origin`: zero.** Guard run, passed.
+- **Round branch on `origin`: absent.** Correct, still local-only.
+- **Process and artifact tags on `origin`: zero.** Unchanged.
+- Nothing was pushed this run at all.
+
+Local branches added this run, all retained on purpose:
+
+| Branch | Why retained |
+| --- | --- |
+| `claude/r3-rev-spine`, `agy/r3-rev-readplane`, `codex/r3-rev-delivery`, `claude/r3-rev-skills` | all seven review markers, first-round and re-review, already merged into the round branch. Reset each to the round head and reuse it plus its worktree for the next re-review. |
+| `codex/r3-spine`, `claude/r3-readplane` | signed and integrated (`cc1007a`, `d509199`); retained until the round PR merges so the signed SHAs stay reachable |
+| `agy/r3-delivery`, `agy/r3-skills` | **live slice work, unsigned.** Do not delete. Each has one short fix dispatch outstanding. |
+
+Re-run at the very close of the run: open team PRs zero, doer branches on
+`origin` zero (guard passed), round branch absent from `origin`, nothing pushed.
+Round branch suite: 103 passed, 13 deselected, 69 subtests.
+
+Worktrees added this run, four, all free and reusable for the re-review:
+`vcf-ops-mcp-rev-claude`, `-rev-claude2`, `-rev-agy`, `-rev-codex`.
+
+## Sweep, round 3 implementation (2026-07-26T00:2xZ, mid-round)
+
+Run at the close of the implementation dispatch run. **The round is not
+closed**: four slices are built and unreviewed, so the end-of-round expectation
+of zero branches does not apply. Everything below is retained on purpose.
+
+- **Open team PRs: zero.** Correct. The round PR opens after the slices are
+  reviewed, integrated, and green.
+- **Doer-prefixed branches on `origin`: zero.** Guard run, passed.
+- **Round branch on `origin`: absent.** Correct, still local-only.
+- **Process and artifact tags on `origin`: zero.** Unchanged.
+- Nothing was pushed this run at all.
+
+Local branches retained on purpose, added this run:
+
+| Branch | Why retained |
+| --- | --- |
+| `codex/r3-contracts` | step-1 head `8806063`, cited by both review markers; already merged at `522218e` |
+| `claude/r3-contracts-signoff` | both step-1 review markers; already merged at `33bca5d` |
+| `codex/r3-spine`, `claude/r3-readplane`, `agy/r3-delivery`, `agy/r3-skills` | **live slice work, unreviewed and unmerged.** Do not delete. Each will be redispatched to continue. |
+
+The earlier retained branches from the phase-3 sweep below are unchanged.
 
 ## Sweep, round 3 phase 3 (2026-07-24, mid-round)
 
@@ -833,6 +1284,73 @@ Run at the close of this round, results recorded rather than assumed.
    fixtures and must **not** be "fixed".
 
 ## Notes for the next run
+
+### From the round-3 slice-review run (2026-07-26)
+
+- **Provision review worktrees up front and the review round is one parallel
+  batch.** Four reviews ran concurrently into four fresh worktrees, each with the
+  author's worktree passed as `--add-dir` so it could run tests read-only where
+  the slice was checked out, and each committing its marker on its own branch cut
+  from the round head. 123 to 329 seconds, no interference, no rebases. This is
+  the shape; the previous run's inability to review was purely a worktree
+  shortage.
+- **Fix trailer defects before the review, never after.** A trailer amend
+  rewrites the commit, and a marker naming the old SHA silently stops covering
+  it. Both amends this run were message-only and verified with
+  `git diff --stat <old> <new>` returning empty.
+- **Stating the exact expected trailer string in the prompt worked first try on
+  both seats**, including the seat that had produced the defect two rounds
+  running. Do not describe the rule; paste the literal string.
+- **Naming specific claims caught a constitution violation this time, not just a
+  record defect.** Four rounds running now. The spine review's claim 1 asked for
+  a step-by-step walk of SPEC section 3 rather than "does the ordering look
+  right", and that is what surfaced that no denial path writes an audit row at
+  all. A generic review would have seen correct-looking authorization code and
+  signed it.
+- **Verify a thin sign-off rather than rejecting it on reputation.** agy-worker
+  signed 5506 lines in 123 seconds. Every checkable claim in its marker was
+  independently confirmed by the orchestrator before the merge, and all of them
+  held. Thin is a reason to check, not a reason to disbelieve, and recording the
+  verification result accurately is what lets the pattern actually change.
+- **Telling a reviewer the depth pattern exists, in the prompt, moved it.** The
+  read-plane prompt quoted this file's own record of the seat's last two rounds,
+  said an incomplete honest review was a good outcome and a fast complete-looking
+  one was not, and named the one claim that had been its own finding. The result
+  was still the shortest review of the round but it cited specific test functions
+  and files for the first time.
+- **Reviews are cheap relative to slices.** 123 to 329 seconds against caps of
+  1800 to 2700. Budget generously anyway; the two long reviews were the two that
+  found the most.
+### From the round-3 implementation run (2026-07-25/26)
+
+- **Poll a dispatch, never wait on it inline.** The harness Bash timeout ceiling
+  is 10 minutes and every cap here is longer, so this run launched each dispatch
+  with `nohup ... &` and then blocked in a separate call on
+  `timeout 570 bash -c 'until <end marker exists>; do sleep 15; done'`. That is
+  the shape that works. **A `timeout` that expires prints nothing and the next
+  command in the chain still runs**, which looked exactly like "the dispatch
+  finished" for the read plane and was not; it had 1000 seconds left. Re-check
+  `systemctl --user list-units 'fdry-<label>-*'` before concluding a dispatch
+  ended.
+- **A review that names claims caught a real defect for the third round
+  running.** The step-1 review dispatch listed seven specific claims to confirm
+  or deny and said withholding was valid. claude-worker denied claim 2 and
+  partially denied claim 4, and its denial was grounded in reading the installed
+  SDK rather than the spike prose. Keep this framing; it is now the single
+  highest-yield practice in this project.
+- **Four parallel dispatches into four worktrees works cleanly.** codex, claude,
+  agy, and a second agy worktree (`-r1-agy2`) ran concurrently with no
+  interference. The `agy` adapter passes `--add-dir "$WORKDIR"` itself, so a
+  second agy worktree needs nothing special.
+- **Slice dispatches are much longer than protocol dispatches.** Protocol work
+  has been 60 to 600 seconds all project. Implementation was 169s, 253s, 303s,
+  and 1592s against 1800s caps. Budget 1800s or more per slice increment, and
+  expect the read plane and delivery to be the long poles.
+- **Peer review needs its own worktree.** A reviewer commits its marker, so it
+  cannot borrow the author's worktree while the author's branch is checked out
+  there. This run had no free worktree at slice-review time, which is the
+  proximate reason the review round is owed to the next run rather than done.
+  Provision `-rev-<resident>` worktrees up front next time.
 
 ### From the round-3 phase-1/2 run
 
