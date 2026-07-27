@@ -5,50 +5,152 @@ update it before exiting. This is machinery, not a human changelog.
 
 ## Current assignment
 
-**Round:** 4, the deploy-path repair (issue #4). A **spec round**, not a build
-round.
-**Orchestrator run:** `gh-issue-4-triage-20260727-013122`
-**Status:** **ROUND 4 SYNTHESIS IS COMPLETE AND AWAITING THE PRINCIPAL.** The
-deliverable is committed on the **local** branch `round/4-deploy-permissions`
-at `51754b7`, and it is deliberately not on `origin` and has no PR, per the
-assignment. Decision record `docs/decisions/011-deploy-path-repair.md` is
-signed by all three doers.
+**Round:** 4, the deploy-path repair (issue #4). Started as a spec round,
+became a **build round** when the principal answered `approved`.
+**Orchestrator run:** `gh-issue-4-execution-20260727-113452`
+**Status:** Slice A is built, peer-signed, integrated, and **proven on the round
+branch**. PR open to `main`, awaiting the external Codex review round.
 
 ### THE NEXT RUN STARTS HERE
 
-**Round 4 delivered a spec and a workplan for issue #4. No code was written and
-nothing merged.** What happens next depends entirely on the principal's answer
-on the issue.
+1. **Check the round PR.** It is the single PR for round 4. If the external
+   Codex review has landed, route each finding to its owning resident, get a
+   non-author sign-off on each fix, integrate locally, and merge. One review
+   round only, per keystone rule 2.
+2. **Expect the post-merge `main` run to end RED at the health poll.** Designed,
+   not broken. `/healthz` returns 503 by construction and that is issue #5
+   (Slice B). Do not extend the timeout and do not re-run. The run is green
+   through test, build, GHCR push, and the slot deploy.
+3. **After merge:** write `.review-passed` straight to `main` (never its own
+   PR), delete the round branch and every doer branch, run the sweep guard, and
+   close #4 with the evidence.
+4. **Issue #5 is Slice B**, claude-worker owning and codex-worker reviewing per
+   011. It is the work that makes `/healthz` return 200.
 
-1. **Read `docs/proposals/4/SPEC.md` and `docs/proposals/4/WORKPLAN.md` on the
-   round branch** (`git show round/4-deploy-permissions:docs/proposals/4/SPEC.md`).
-   `TLDR.md` is what the principal actually reads on the issue.
-2. **Five decisions are with the principal**, enumerated in `SPEC.md` section 4.
-   Slice A cannot start until Decisions 1, 2, and 4 are answered, and Decision
-   3 (what the deploy key can actually run) can double Slice A's size if it
-   lands badly. Decision 5 is Slice B and blocks nothing now.
-3. **If approved, run the build round from `WORKPLAN.md`.** codex-worker owns
-   Slice A with agy-worker reviewing; agy-worker owns the two read-only
-   attestations in steps 1 and 2; claude-worker owns Slice B when it is filed.
-   The division is capability-based and is recorded in 011.
-4. **Do not re-litigate the converged points.** Job-scoped `permissions:`, the
-   build/deploy split on the `:${{ github.sha }}` tag, the preflight, the
-   rename, and the Slice A / Slice B boundary are all decided, three of them by
-   recorded ballot. codex-worker holds a standing dissent on the rename only.
+### What this round established, and what it cost to establish
 
-### The round branch is local on purpose, and this is the one thing to not get wrong
+**The principal answered `approved` and nothing else.** The five decisions
+round 4 escalated came back unanswered, so the orchestrator resolved all five
+itself per keystone rule 5. They are recorded with their evidence in
+`docs/decisions/012-slice-a-deploy-rewrite.md`. **Read 012 before 011**; it
+changes what 011's workplan assumed.
 
-`round/4-deploy-permissions` exists **only in the local repo**. The
-GitHub-issue pipeline's wrapper reads `docs/proposals/4/` off it from this box
-and posts the issue comment; the orchestrator does not post to GitHub itself
-and did not push. Do not push this branch and do not open a PR for it until
-the principal approves on the issue. Do not delete it either: it is the only
-copy of the round's deliverable.
+**Decision 3 landed on the bad side, and it was settled from source rather than
+by asking.** `~/claude/lab-admin/scripts/deploy-wrapper.sh` is the forced
+command behind every slot key on `deploy@docker.int`. Its allowed verbs are
+`scp` into the slot dir, `scp` of caddy artifacts, one legacy `rm`, and
+`docker compose {pull|up -d|down|ps|restart|logs}`. **`vcf-ops-mcp get-digest`
+does not exist and never did.** Every ssh the old deploy step made would have
+been denied. Slice A therefore became a compose-file rewrite, hearthgate-shaped,
+roughly double the size round 4 estimated.
 
-Doer branches `claude/r4-deploy-permissions`, `codex/r4-deploy-permissions`,
-and `agy/r4-deploy-permissions` are retained on purpose, local only, pending
-the approval that turns this into a build round. Worktrees are under
-`/home/scott/foundry/projects/vcf-ops-mcp-worktrees/`.
+**The authoritative document for anything touching docker.int is
+`~/claude/lab-admin/docs/lab-container-host-contract.md` section 3.2.2.** Not
+hearthgate's compose file, which is one caller of that contract and does not
+show all of it. codex-worker worked from hearthgate and produced a compose file
+violating three mandatory clauses. Point the next worker at the contract.
+
+**Direct ssh to lab hosts is blocked at the tool layer.** Recon needing a lab
+host goes through `/request-crossworkspace` to lab-admin. Everything this round
+needed happened to be answerable from lab-admin's checked-in files.
+
+**The framework artifact tools auto-commit and this repo has a naming scheme.**
+`bin/team-record-artifact` commits as it goes, so a wrong `--round`/`--phase`
+is a commit, not a stray file. This repo uses `round-N` / `phaseN`, not
+`N` / `proposal`. Check `.team/provenance.md` for the established shape first.
+
+### The peer review earned its cost, again
+
+agy-worker **withheld** sign-off on `792f543` with three findings, all
+independently matching what the orchestrator had already found from the
+contract:
+
+| # | Finding | Consequence had it shipped |
+| --- | --- | --- |
+| 1 | compose joins no `docker-slots` network | fleet-caddy has no route to the container at all |
+| 2 | no resource limits, no logging cap | violates two mandatory contract clauses |
+| 3 | `${SESSION_SECRET:?}` with no `.env` key for it | `docker compose pull` dies before the deploy starts, and the round proves nothing |
+
+codex-worker fixed all three in `841612e` **without rebasing or amending**, so
+the withholding marker still names the SHA it judged. Both markers are in
+`.team/signoffs/`. Re-review granted at the new head.
+
+Finding 3 is the one to remember: it would have produced a red deploy step that
+looked like a slot or credential problem and was actually a compose file that
+could not parse. That is the misdiagnosis this round was built to avoid.
+
+### The round-branch proof worked, and it is the practice to keep
+
+Decision 4 (publish images from `round/*`) paid for itself immediately. Run
+`30263379624` on `round/4-deploy-permissions`:
+
+- CI Pipeline: **success**
+- Build and Push: **success**, digest
+  `sha256:9839c5562d82518cc213d2c664ada2da5a8fdb61920d3e43be288845bde06607`
+- Deploy: **skipped**, correctly, since the job is gated to `main`
+
+**The GHCR push works. D1 is proven and the `main` merge was not spent proving
+it.** The missing job-scoped `permissions: packages: write` really was the cause
+of the original failure, and it really was not the only defect.
+
+Integrated suite on the round branch before push: **126 passed, 13 skipped, 69
+subtests**. Use a venv; a bare `python3 -m pytest` in a fresh worktree fails
+collection on `ModuleNotFoundError: vcf_ops_mcp`.
+
+### Configuration created this round, and the trap it avoided
+
+| Name | Value | Kind |
+| --- | --- | --- |
+| `DOCKER_DEPLOY_HOST` | `deploy@docker.int.sentania.net` | repository **variable** |
+| `SERVICE_URL` | `https://vcf-ops-mcp.int.sentania.net` | repository **variable** |
+
+Neither is a credential. `DOCKER_DEPLOY_HOST` carries the `user@` part, matching
+hearthgate, and the workflow's hardcoded `deploy@` prefix was deleted. Getting
+this backwards yields `deploy@deploy@host`, which round 4 predicted and which
+the preflight cannot catch because the value is non-empty.
+
+**`DOCKER_DEPLOY_KEY` is still unverified as this slot's key** and deliberately
+so. Secret values are unreadable and lab ssh is blocked, but the wrapper derives
+the slot from `authorized_keys`, so a wrong key fails loudly on the first scp
+with `deploy-wrapper: command not allowed`. That is a better oracle than an
+attestation and it costs one run.
+
+### Two things still unverified, both by design
+
+- **The package's visibility and repo linkage were not read back.** The
+  orchestrator's token lacks `read:packages`, exactly as the workplan predicted.
+  The push succeeding is the proof that matters; the metadata read is not.
+- **The slot's registered `upstream_service` and `upstream_port`.** The compose
+  file uses `vcf-ops-mcp-web` on 8000, matching both the contract's `<slot>-web`
+  convention and the image's `EXPOSE`. If the slot was registered against
+  something else, the symptom is a 503 with a **running** container, which
+  `docker compose ps` distinguishes from issue #5's 503.
+
+### Branch state
+
+`round/4-deploy-permissions` is **on `origin`** with an open PR; correct at this
+stage, and it supersedes the local-only rule that governed it as a spec round.
+Doer branches `codex/r4-slice-a` and `agy/r4-slice-a-review` plus the three
+spec-phase doer branches are retained locally until the PR merges, then all are
+deleted in the sweep. Every artifact they hold that a decision record cites is
+already pinned under `docs/artifacts/round-4/` and ledgered in
+`.team/provenance.md`, so deletion is safe.
+
+### Carried items
+
+- The non-`CancelledError` `BaseException` lease leak in the dispatcher.
+  Fast-lane sized. See the round-3 section below.
+- `bin/team-provenance-ledger` writes an em-dash. Belongs to the framework.
+- **`main` has no branch protection**, so the consensus gate and CI are both
+  advisory. Worth a deliberate decision rather than an accident.
+- The deploy shell's recorded rough edges: `curl -k`, the 60-second health
+  budget, and rollback having no digest source now that `get-digest` is known
+  not to exist. All in `docs/proposals/4/WORKPLAN.md`'s follow-up list.
+- Phase 2 remains gated on the principal. No action execution against a live
+  appliance, never against prod.
+- `.team/blocked/fleet-caddy-slot-config.md` is **closed out this round**.
+
+---
 
 ### What round 4 actually found, and why it matters more than the issue did
 

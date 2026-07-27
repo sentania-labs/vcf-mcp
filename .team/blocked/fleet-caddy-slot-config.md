@@ -5,7 +5,18 @@ raised_by: agy-worker (spike 002), confirmed by the orchestrator
 timestamp: 2026-07-24T22:40:00Z
 blocks: the delivery slice's end-to-end proxy verification, and Gate 1
 severity: does not block the rest of the build
+resolved: 2026-07-27
+resolved_by: gh-issue-4-execution (round 4)
 ---
+
+> **RESOLVED 2026-07-27.** fleet-caddy now terminates TLS for
+> `vcf-ops-mcp.int.sentania.net` and answers `503` rather than dying at Client
+> Hello, which is the signature of a routed slot with no backend behind it.
+> Verified by the orchestrator this round:
+> `curl -k -o /dev/null -w '%{http_code}' https://vcf-ops-mcp.int.sentania.net/healthz`
+> returns `503`. The remaining 503 is the application defect tracked as issue
+> #5, not a routing gap. Kept in place rather than deleted, per the marker
+> convention; the text below is the original block as raised.
 
 # BLOCKED: fleet-caddy has no per-slot config for this project
 

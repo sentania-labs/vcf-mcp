@@ -34,3 +34,12 @@ non-blocking item.
 | `docs/artifacts/round-3/phase3/codex-worker-signature.md` | `bebc4ac448bb9600acb98c30439ab2d241974450` | `bebc4ac448bb9600acb98c30439ab2d241974450` | codex-worker | round-3/phase3 | 2026-07-26 |
 | `docs/artifacts/round-3/phase3/agy-worker-signature.md` | `27f0e3c06763f5fc93fccbc09d0ad3b0adf8746e` | `27f0e3c06763f5fc93fccbc09d0ad3b0adf8746e` | agy-worker | round-3/phase3 | 2026-07-26 |
 | `docs/artifacts/round-3/phase3/codex-worker-withholding.md` | `c3f392c730f472461dd4a7e9e271968f2ae91da2` | `c3f392c730f472461dd4a7e9e271968f2ae91da2` | codex-worker | round-3/phase3 | 2026-07-26 |
+| `docs/artifacts/round-4/phase1/claude-worker-proposal.md` | `38539598126010d605fa5a4fe251b9099b0279fa` | `38539598126010d605fa5a4fe251b9099b0279fa` | claude-worker | round-4/phase1 | 2026-07-27 |
+| `docs/artifacts/round-4/phase1/codex-worker-proposal.md` | `c1558944b00c180d4f6489504497368cbc9b2cc0` | `c1558944b00c180d4f6489504497368cbc9b2cc0` | codex-worker | round-4/phase1 | 2026-07-27 |
+| `docs/artifacts/round-4/phase1/agy-worker-proposal.md` | `996deaac2c4b3cc2e023e743abbbc4332a048c4b` | `996deaac2c4b3cc2e023e743abbbc4332a048c4b` | agy-worker | round-4/phase1 | 2026-07-27 |
+| `docs/artifacts/round-4/phase2/claude-worker-critique.md` | `a7b740c6841ece359bfe30bcea83a9431bf61aac` | `a7b740c6841ece359bfe30bcea83a9431bf61aac` | claude-worker | round-4/phase2 | 2026-07-27 |
+| `docs/artifacts/round-4/phase2/codex-worker-critique.md` | `6f341a11a59a2714b3d5966c42e3b26136a8ca58` | `6f341a11a59a2714b3d5966c42e3b26136a8ca58` | codex-worker | round-4/phase2 | 2026-07-27 |
+| `docs/artifacts/round-4/phase2/agy-worker-critique.md` | `5f52789381b0fe31ae624fe640d8069e427f15f0` | `5f52789381b0fe31ae624fe640d8069e427f15f0` | agy-worker | round-4/phase2 | 2026-07-27 |
+| `docs/artifacts/round-4/phase3/claude-worker-ballot.md` | `88bc5f969631562a2d212f8baf18e78b938ce767` | `88bc5f969631562a2d212f8baf18e78b938ce767` | claude-worker | round-4/phase3 | 2026-07-27 |
+| `docs/artifacts/round-4/phase3/codex-worker-ballot.md` | `b71f8b5626135f717217f688323e616b7f6785fe` | `b71f8b5626135f717217f688323e616b7f6785fe` | codex-worker | round-4/phase3 | 2026-07-27 |
+| `docs/artifacts/round-4/phase3/agy-worker-ballot.md` | `4867de401ded64693392931b8ce62cf89d2f38de` | `4867de401ded64693392931b8ce62cf89d2f38de` | agy-worker | round-4/phase3 | 2026-07-27 |

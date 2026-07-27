@@ -1,0 +1,40 @@
+services:
+  vcf-ops-mcp-web:
+    image: ${VCF_OPS_MCP_IMAGE:?VCF_OPS_MCP_IMAGE must be set}
+    restart: unless-stopped
+    read_only: true
+    # SESSION_SECRET wiring is deferred to issue #5.
+    networks: [docker-slots]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    expose:
+      - "8000"
+    volumes:
+      - app_data:/data
+      - credential_store:/keys
+      - audit_log:/audit
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+networks:
+  docker-slots:
+    external: true
+
+volumes:
+  app_data:
+  credential_store:
+  audit_log:

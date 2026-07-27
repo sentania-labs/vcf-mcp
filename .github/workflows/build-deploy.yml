@@ -1,0 +1,142 @@
+name: build-deploy
+
+on:
+  push:
+    branches: [ "main", "round/*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: CI Pipeline
+    runs-on: [self-hosted]
+    if: github.repository == 'sentania-labs/vcf-ops-mcp' # fork-gated
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip hatchling
+          pip install -e .[test]
+
+      - name: Run Lint (Incomplete)
+        run: echo "Linting step not yet implemented"
+
+      - name: Run Tier 1 and 2 Tests
+        run: pytest tests/
+
+      - name: Run Fixture Scanner (Incomplete)
+        run: echo "Fixture scanner step not yet implemented"
+
+      - name: Fixture Freshness Check (Incomplete)
+        run: echo "Fixture freshness step not yet implemented"
+
+      - name: Skills Index Check (Incomplete)
+        run: echo "Skills index step not yet implemented"
+
+  build:
+    name: Build and Push
+    needs: test
+    runs-on: [self-hosted]
+    if: github.event_name == 'push' && github.repository == 'sentania-labs/vcf-ops-mcp'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/sentania-labs/vcf-ops-mcp:${{ github.sha }}
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: [self-hosted]
+    if: github.ref == 'refs/heads/main' && github.repository == 'sentania-labs/vcf-ops-mcp'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          DEPLOY_KEY: ${{ secrets.DOCKER_DEPLOY_KEY }}
+          DEPLOY_HOST: ${{ vars.DOCKER_DEPLOY_HOST }}
+          SERVICE_URL: ${{ vars.SERVICE_URL }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          missing=()
+          [ -n "$DEPLOY_KEY" ] || missing+=("DOCKER_DEPLOY_KEY")
+          [ -n "$DEPLOY_HOST" ] || missing+=("DOCKER_DEPLOY_HOST")
+          [ -n "$SERVICE_URL" ] || missing+=("SERVICE_URL")
+          [ -n "$IMAGE_DIGEST" ] || missing+=("IMAGE_DIGEST")
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "Missing required deployment configuration: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Deploy to slot and verify health
+        env:
+          DEPLOY_KEY: ${{ secrets.DOCKER_DEPLOY_KEY }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          DEPLOY_HOST: ${{ vars.DOCKER_DEPLOY_HOST }}
+          SERVICE_URL: ${{ vars.SERVICE_URL }}
+        run: |
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set and nonempty}"
+          KEY_PATH="$RUNNER_TEMP/deploy_key"
+          ENV_PATH="$RUNNER_TEMP/vcf-ops-mcp.env"
+          trap 'rm -f -- "$KEY_PATH" "$ENV_PATH"' EXIT
+          install -m 600 /dev/null "$KEY_PATH"
+          printf '%s\n' "$DEPLOY_KEY" > "$KEY_PATH"
+          install -m 600 /dev/null "$ENV_PATH"
+          printf 'VCF_OPS_MCP_IMAGE=ghcr.io/sentania-labs/vcf-ops-mcp@%s\n' "$IMAGE_DIGEST" > "$ENV_PATH"
+
+          scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
+            deploy/compose.yml "$DEPLOY_HOST:/srv/services/vcf-ops-mcp/docker-compose.yml"
+          scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
+            "$ENV_PATH" "$DEPLOY_HOST:/srv/services/vcf-ops-mcp/.env"
+          ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
+            "$DEPLOY_HOST" "docker compose --project-directory /srv/services/vcf-ops-mcp pull"
+          ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
+            "$DEPLOY_HOST" "docker compose --project-directory /srv/services/vcf-ops-mcp up -d"
+          ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
+            "$DEPLOY_HOST" "docker compose --project-directory /srv/services/vcf-ops-mcp ps"
+
+          echo "Waiting for service to become healthy..."
+          HEALTHY=0
+          for i in {1..12}; do
+            if curl -k -f -s "$SERVICE_URL/healthz"; then
+              echo "Health check passed!"
+              HEALTHY=1
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$HEALTHY" -eq 0 ]; then
+            echo "Health check failed. Rollback is unavailable until a prior digest can be derived through the slot wrapper."
+            exit 1
+          fi
+
+          exit 0
