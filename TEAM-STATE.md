@@ -5,6 +5,139 @@ update it before exiting. This is machinery, not a human changelog.
 
 ## Current assignment
 
+**Round:** 4, the deploy-path repair (issue #4). A **spec round**, not a build
+round.
+**Orchestrator run:** `gh-issue-4-triage-20260727-013122`
+**Status:** **ROUND 4 SYNTHESIS IS COMPLETE AND AWAITING THE PRINCIPAL.** The
+deliverable is committed on the **local** branch `round/4-deploy-permissions`
+at `51754b7`, and it is deliberately not on `origin` and has no PR, per the
+assignment. Decision record `docs/decisions/011-deploy-path-repair.md` is
+signed by all three doers.
+
+### THE NEXT RUN STARTS HERE
+
+**Round 4 delivered a spec and a workplan for issue #4. No code was written and
+nothing merged.** What happens next depends entirely on the principal's answer
+on the issue.
+
+1. **Read `docs/proposals/4/SPEC.md` and `docs/proposals/4/WORKPLAN.md` on the
+   round branch** (`git show round/4-deploy-permissions:docs/proposals/4/SPEC.md`).
+   `TLDR.md` is what the principal actually reads on the issue.
+2. **Five decisions are with the principal**, enumerated in `SPEC.md` section 4.
+   Slice A cannot start until Decisions 1, 2, and 4 are answered, and Decision
+   3 (what the deploy key can actually run) can double Slice A's size if it
+   lands badly. Decision 5 is Slice B and blocks nothing now.
+3. **If approved, run the build round from `WORKPLAN.md`.** codex-worker owns
+   Slice A with agy-worker reviewing; agy-worker owns the two read-only
+   attestations in steps 1 and 2; claude-worker owns Slice B when it is filed.
+   The division is capability-based and is recorded in 011.
+4. **Do not re-litigate the converged points.** Job-scoped `permissions:`, the
+   build/deploy split on the `:${{ github.sha }}` tag, the preflight, the
+   rename, and the Slice A / Slice B boundary are all decided, three of them by
+   recorded ballot. codex-worker holds a standing dissent on the rename only.
+
+### The round branch is local on purpose, and this is the one thing to not get wrong
+
+`round/4-deploy-permissions` exists **only in the local repo**. The
+GitHub-issue pipeline's wrapper reads `docs/proposals/4/` off it from this box
+and posts the issue comment; the orchestrator does not post to GitHub itself
+and did not push. Do not push this branch and do not open a PR for it until
+the principal approves on the issue. Do not delete it either: it is the only
+copy of the round's deliverable.
+
+Doer branches `claude/r4-deploy-permissions`, `codex/r4-deploy-permissions`,
+and `agy/r4-deploy-permissions` are retained on purpose, local only, pending
+the approval that turns this into a build round. Worktrees are under
+`/home/scott/foundry/projects/vcf-ops-mcp-worktrees/`.
+
+### What round 4 actually found, and why it matters more than the issue did
+
+Issue #4 said the missing `permissions:` block was "the only thing between
+merged code and a running service." It was not. Five defects sit in that path
+and the issue named one. The full evidence is in `SPEC.md` section 1; the two
+that change what the team does:
+
+- **Three of the four secrets the deploy step reads do not exist.** The
+  workflow reads `DOCKER_INT_DEPLOY_KEY`, `DEPLOY_HOST`, `SERVICE_URL`. Repo
+  secrets contain exactly `DOCKER_DEPLOY_KEY`. So the first run that gets past
+  the permissions fix dies at an ssh to a host literally named `deploy@` with
+  an empty key, and `|| echo "none"` swallows the one diagnostic signal.
+  **This directly contradicts line 321 of this file's round-3 section**, which
+  records the FQDNs moving "into `DEPLOY_HOST` / `SERVICE_URL` Actions
+  secrets". The FQDNs came out of the workflow. The secrets were never created.
+  A peer sign-off closed that item on the diff, because a diff is all a diff
+  can show. **Do not trust a "moved to a secret" claim in this file again
+  without reading the secret inventory.** The workplan's preflight step is the
+  machine-enforced answer.
+- **`/healthz` returns 503 by construction at every possible digest.** Uvicorn
+  calls `create_app` with no arguments, `audit_repository` is `None`, and there
+  is no concrete `AuditRepository` anywhere in `src/`. Separately the container
+  raises on a `SESSION_SECRET` nothing supplies. So issue #4's second
+  acceptance criterion is unreachable by any change to a CI file. codex-worker
+  denied this same item in round 3 (`.team/signoffs/agy-r3-delivery-19efb0cdab60.md`,
+  claim 4) and it was carried as PARTIALLY CLOSED. It has now caused a second
+  round to be filed against an impossible criterion. It is Slice B and it needs
+  a filed issue, not a third carry.
+
+Established by measurement and worth keeping: hearthgate's GHCR package is
+**private** and the docker.int host pulls it with no workflow-supplied
+credential, so the host holds a daemon-level GHCR credential. A package
+visibility flip is very likely not needed and is not a team-level workaround.
+And hearthgate's deploy key runs arbitrary `scp` and `docker compose`, which
+means this repo's `vcf-ops-mcp get-digest` forced-command grammar is
+unattested and may not exist.
+
+### Protocol notes from this round
+
+- **Three-way blind proposal earned its cost here.** claude-worker found D2
+  through D5, codex-worker independently found D2 and prescribed the winning
+  permissions placement, agy-worker was refuted on its headline risk. A
+  fast-laned three-line fix would have shipped and failed on `main`.
+- **A ballot round was re-run rather than counted from the critiques**, because
+  claude-worker dropped the `needs.build.outputs.digest` mechanism its peers
+  had attacked. Counting the old critiques would have recorded votes against a
+  proposal that no longer existed. Question A came back 4-0 for; the earlier
+  critique split was 2-1 against.
+- **The ratification round caught three defects in the orchestrator's own
+  documents**, including a workplan that told a doer to push and ordered the
+  round-branch proof before the integration that makes it possible. Signing the
+  record is not ceremony. Keep doing it, and keep telling doers they may deny.
+- **Artifact-only doer branches integrated without pre-integration sign-off
+  markers**, per the round-1 precedent: doers ratify the decision record rather
+  than signing each other's proposal documents. The sign-off gate applies in
+  full to Slice A's implementation.
+- **Exit codes were worthless again.** All twelve dispatches this run returned
+  0. Verification came from `branch_sha_before`/`after` and `uncommitted_work`
+  in the end markers, then from the tree.
+- **The orchestrator re-verified every load-bearing claim itself** rather than
+  taking it from a proposal: the `read` default workflow permission, the secret
+  and variable inventories, `404 Branch not protected`, `app.py`'s 503 path and
+  `SESSION_SECRET` raise, the absent `AuditRepository`, the absent compose
+  file, the anonymous GHCR token responses, and hearthgate's `deploy.yml`
+  shape. All confirmed as reported.
+
+### Carried items, unchanged by this round
+
+- The non-`CancelledError` `BaseException` lease leak in the dispatcher.
+  Fast-lane sized. See the round-3 section below.
+- `bin/team-provenance-ledger` writes an em-dash. Belongs to the framework.
+- `.team/blocked/fleet-caddy-slot-config.md` is **resolved and should be closed
+  out**; TLS now terminates and the proxy answers 503 rather than dying at
+  Client Hello. It currently reads as open.
+- Phase 2 remains gated on the principal. No action execution against a live
+  appliance, never against prod.
+- `main` has no branch protection, so the consensus gate and CI are both
+  advisory. Worth a deliberate decision rather than an accident.
+
+---
+
+# Archive: round 3 and earlier
+
+Everything below this line is the state as of the close of round 3. It is kept
+for its findings, not as current status.
+
+## Round 3 assignment (closed)
+
 **Round:** 3, the Phase 1 build (first real code round)
 **Orchestrator run:** `gh-issue-2-execution-20260726-014036` (external-review
 run; supersedes every earlier run's state in this file)
