@@ -1,9 +1,31 @@
+# Slot compose file for vcf-ops-mcp, deployed to
+# /srv/services/vcf-ops-mcp/docker-compose.yml on docker.int by
+# .github/workflows/build-deploy.yml.
+#
+# Two env files feed the interpolation below, and the deploy names both
+# explicitly with --env-file:
+#
+#   .env         authored by hand on the slot, owned by the host owner, holds
+#                SESSION_SECRET. CI never writes it. See .env.example.
+#   images.env   written by CI on every deploy, owned by CI, holds the pinned
+#                image digest. The host owner never edits it.
+#
+# TLS is not configured here and must not be. fleet-caddy terminates TLS at the
+# edge for vcf-ops-mcp.int.sentania.net and reaches this container over plain
+# HTTP on the shared docker-slots network.
 services:
   vcf-ops-mcp-web:
     image: ${VCF_OPS_MCP_IMAGE:?VCF_OPS_MCP_IMAGE must be set}
     restart: unless-stopped
     read_only: true
-    # SESSION_SECRET wiring is deferred to issue #5.
+    environment:
+      # Signing key for the admin UI session cookie. The value belongs to the
+      # slot .env and to nothing else: not this file, not CI, not the image.
+      # The fail-fast form is deliberate. An unset secret must stop the deploy
+      # with a named error here, because the alternative is a container that
+      # starts, raises RuntimeError out of create_app, and restart-loops behind
+      # a bare 503 at the edge.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in the slot .env, see deploy/.env.example}
     networks: [docker-slots]
     deploy:
       resources:

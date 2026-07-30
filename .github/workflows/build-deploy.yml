@@ -96,32 +96,61 @@ jobs:
             exit 1
           fi
 
+      # Two env files, two owners, and the split is load-bearing.
+      #
+      # The slot `.env` is authored by hand on the host and holds SESSION_SECRET
+      # (see deploy/.env.example). This job must never write it. It used to scp
+      # a one-line file straight over it, which wiped the secret out on every
+      # deploy and crash-looped the container.
+      #
+      # `images.env` is the opposite: CI owns it, the host owner never edits it,
+      # and it carries nothing but the pinned digest.
+      #
+      # BOTH --env-file flags are required on EVERY compose invocation below,
+      # which is why they live in one variable rather than being retyped. Do not
+      # "simplify" a call back to a bare `docker compose`: `--env-file` replaces
+      # Compose's implicit `.env` load rather than adding to it, `images.env` is
+      # never auto-loaded at all, and a call missing them fails no differently
+      # from a working one. It just drops the secret and the digest, so the
+      # fail-fast `${VAR:?}` interpolations abort the run.
       - name: Deploy to slot and verify health
         env:
           DEPLOY_KEY: ${{ secrets.DOCKER_DEPLOY_KEY }}
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
           DEPLOY_HOST: ${{ vars.DOCKER_DEPLOY_HOST }}
           SERVICE_URL: ${{ vars.SERVICE_URL }}
+          SLOT: /srv/services/vcf-ops-mcp
         run: |
           : "${RUNNER_TEMP:?RUNNER_TEMP must be set and nonempty}"
           KEY_PATH="$RUNNER_TEMP/deploy_key"
-          ENV_PATH="$RUNNER_TEMP/vcf-ops-mcp.env"
-          trap 'rm -f -- "$KEY_PATH" "$ENV_PATH"' EXIT
+          IMAGES_ENV_PATH="$RUNNER_TEMP/images.env"
+          trap 'rm -f -- "$KEY_PATH" "$IMAGES_ENV_PATH"' EXIT
           install -m 600 /dev/null "$KEY_PATH"
           printf '%s\n' "$DEPLOY_KEY" > "$KEY_PATH"
-          install -m 600 /dev/null "$ENV_PATH"
-          printf 'VCF_OPS_MCP_IMAGE=ghcr.io/sentania-labs/vcf-ops-mcp@%s\n' "$IMAGE_DIGEST" > "$ENV_PATH"
+          printf 'VCF_OPS_MCP_IMAGE=ghcr.io/sentania-labs/vcf-ops-mcp@%s\n' "$IMAGE_DIGEST" > "$IMAGES_ENV_PATH"
+          cat "$IMAGES_ENV_PATH"
+
+          COMPOSE="docker compose --project-directory $SLOT --env-file $SLOT/.env --env-file $SLOT/images.env"
+
+          # Fail with an actionable message rather than Compose's bare "env file
+          # not found". Existence only: this job never reads the file.
+          if ! ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
+            "$DEPLOY_HOST" "test -f $SLOT/.env"; then
+            echo "Missing host-owned $SLOT/.env on $DEPLOY_HOST." >&2
+            echo "Create it by hand from deploy/.env.example (SESSION_SECRET is required). CI does not write this file." >&2
+            exit 1
+          fi
 
           scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
-            deploy/compose.yml "$DEPLOY_HOST:/srv/services/vcf-ops-mcp/docker-compose.yml"
+            deploy/compose.yml "$DEPLOY_HOST:$SLOT/docker-compose.yml"
           scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
-            "$ENV_PATH" "$DEPLOY_HOST:/srv/services/vcf-ops-mcp/.env"
+            "$IMAGES_ENV_PATH" "$DEPLOY_HOST:$SLOT/images.env"
           ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
-            "$DEPLOY_HOST" "docker compose --project-directory /srv/services/vcf-ops-mcp pull"
+            "$DEPLOY_HOST" "$COMPOSE pull"
           ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
-            "$DEPLOY_HOST" "docker compose --project-directory /srv/services/vcf-ops-mcp up -d"
+            "$DEPLOY_HOST" "$COMPOSE up -d"
           ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
-            "$DEPLOY_HOST" "docker compose --project-directory /srv/services/vcf-ops-mcp ps"
+            "$DEPLOY_HOST" "$COMPOSE ps"
 
           echo "Waiting for service to become healthy..."
           HEALTHY=0

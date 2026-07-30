@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Sentania VCF Ops MCP (unofficial)"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.2.0",
+    # Capped below 2.0: mcp 2.x removed mcp.server.fastmcp, the framework
+    # decision 002 selected. Raising the cap is a framework migration.
+    "mcp>=1.2.0,<2",
     "starlette",
     "uvicorn",
     "jinja2",

@@ -19,7 +19,13 @@ audit.log*
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 .env
 .env.*
+# The slot .env contract is a template with no real value in it, and it has to
+# be readable in the repo for anyone provisioning a slot.
+!.env.example
 
 .DS_Store

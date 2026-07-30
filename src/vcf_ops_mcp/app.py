@@ -9,29 +9,48 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from vcf_ops_mcp.contracts import AuditRepository
 
 async def healthz(request: Request) -> JSONResponse:
+    """Report readiness, which is exactly audit write capability.
+
+    200 if and only if the audit store accepts a durable write. Every other
+    condition is 503. A server that cannot record what it did must not be
+    routed traffic, per the constitution's audit invariant, so this endpoint
+    never reports ready on an unproven store and never treats "the store could
+    not be queried" as "the store is fine".
+    """
+
     audit_repo: typing.Optional[AuditRepository] = getattr(request.app.state, "audit_repository", None)
-    
-    if audit_repo is not None:
-        is_writable = await audit_repo.is_writable()
-        unreconciled_count = await audit_repo.unreconciled_attempt_count()
-        readiness = is_writable
-        
-        return JSONResponse(
-            {
-                "ready": readiness,
-                "audit_writable": is_writable,
-                "unreconciled_outcome_unknown_count": unreconciled_count,
-            },
-            status_code=200 if readiness else 503,
-        )
-    else:
+
+    if audit_repo is None:
         return JSONResponse(
             {
                 "ready": False,
+                "audit_writable": False,
+                "unreconciled_outcome_unknown_count": None,
                 "error": "Audit repository is unavailable",
             },
             status_code=503,
         )
+
+    try:
+        is_writable = await audit_repo.is_writable()
+    except Exception:
+        is_writable = False
+
+    # An unreadable count must never be reported as zero. Null says "unknown",
+    # and readiness is already false whenever the store cannot be reached.
+    try:
+        unreconciled_count: typing.Optional[int] = await audit_repo.unreconciled_attempt_count()
+    except Exception:
+        unreconciled_count = None
+
+    body: dict[str, object] = {
+        "ready": is_writable,
+        "audit_writable": is_writable,
+        "unreconciled_outcome_unknown_count": unreconciled_count,
+    }
+    if not is_writable:
+        body["error"] = "Audit repository is not writable"
+    return JSONResponse(body, status_code=200 if is_writable else 503)
 
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
