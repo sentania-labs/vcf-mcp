@@ -132,21 +132,27 @@ jobs:
 
           COMPOSE="docker compose --project-directory $SLOT --env-file $SLOT/.env --env-file $SLOT/images.env"
 
-          # Fail with an actionable message rather than Compose's bare "env file
-          # not found". Existence only: this job never reads the file.
-          if ! ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
-            "$DEPLOY_HOST" "test -f $SLOT/.env"; then
-            echo "Missing host-owned $SLOT/.env on $DEPLOY_HOST." >&2
-            echo "Create it by hand from deploy/.env.example (SESSION_SECRET is required). CI does not write this file." >&2
-            exit 1
-          fi
-
           scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
             deploy/compose.yml "$DEPLOY_HOST:$SLOT/docker-compose.yml"
           scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
             "$IMAGES_ENV_PATH" "$DEPLOY_HOST:$SLOT/images.env"
-          ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
-            "$DEPLOY_HOST" "$COMPOSE pull"
+          # The slot account runs a forced-command wrapper with a verb allowlist
+          # (see the lab container host contract). It permits scp -O under the
+          # slot directory and `docker compose --project-directory <slot>
+          # [--env-file ...] {pull,up -d,down,ps,restart,logs}`, and nothing
+          # else: no `cd`, no heredocs, no `test`, no shell metacharacters. Any
+          # probe of the slot filesystem added here will be rejected with
+          # "deploy-wrapper: command not allowed" before it runs. So the missing
+          # `.env` case is detected by letting Compose fail on it and adding the
+          # guidance on this side, rather than by asking the host anything.
+          if ! ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
+            "$DEPLOY_HOST" "$COMPOSE pull"; then
+            echo "Compose pull failed. If it reported a missing env file, the" >&2
+            echo "host-owned $SLOT/.env does not exist yet: create it by hand" >&2
+            echo "from deploy/.env.example (SESSION_SECRET is required)." >&2
+            echo "CI never writes that file." >&2
+            exit 1
+          fi
           ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
             "$DEPLOY_HOST" "$COMPOSE up -d"
           ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
