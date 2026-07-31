@@ -278,6 +278,14 @@ class SqliteAuditRepository:
     ) -> int:
         return await self._run(self._close_unreconciled, recovered_at)
 
+    async def recent_records(
+        self, *, limit: int = 100
+    ) -> tuple[AuditRecord, ...]:
+        """Return the newest committed ledger rows for the admin UI."""
+
+        bounded = max(1, min(limit, 500))
+        return await self._run(self._recent_records, bounded)
+
     # -- readiness ---------------------------------------------------------
 
     def _ensure_ready(self) -> sqlite3.Connection:
@@ -394,6 +402,14 @@ class SqliteAuditRepository:
 
     def _close_unreconciled(self, recovered_at: datetime) -> int:
         return self._reconcile(self._require_connection(), recovered_at)
+
+    def _recent_records(self, limit: int) -> tuple[AuditRecord, ...]:
+        rows = self._require_connection().execute(
+            f"SELECT {', '.join(_RECORD_COLUMNS)}"
+            " FROM audit_records ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return tuple(_record_from_row(row) for row in rows)
 
     def _reconcile(
         self, connection: sqlite3.Connection, recovered_at: datetime

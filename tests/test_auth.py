@@ -1,11 +1,10 @@
 import time
-from unittest import mock
 
-import pytest
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
 from vcf_ops_mcp.admin import auth
+
 
 def test_password_hashing():
     password = "correcthorsebatterystaple"
@@ -20,9 +19,10 @@ def test_password_hashing():
     # Ensure it's not a plain comparison
     assert password not in hashed
 
-def build_mock_request(session_data: dict) -> Request:
+def build_mock_request(session_data: dict, method: str = "GET") -> Request:
     scope = {
         "type": "http",
+        "method": method,
         "session": session_data,
         "url": "http://testserver/path",
     }
@@ -98,7 +98,34 @@ def test_recent_reauth():
     assert isinstance(result, RedirectResponse)
     assert result.status_code == 303
     assert result.headers["location"] == "/admin/reauth"
-    assert req.session["next"] == "http://testserver/path"
+    assert req.session["next"] == "/path"
+
+def test_stale_reauth_from_a_post_returns_to_the_dashboard():
+    now = time.time()
+    req = build_mock_request(
+        {
+            "user_id": "admin",
+            "auth_time": now - auth.RECENT_REAUTH_WINDOW_SECONDS - 10,
+        },
+        method="POST",
+    )
+    result = auth.require_recent_reauth(req)
+    assert isinstance(result, RedirectResponse)
+    assert result.headers["location"] == "/admin/reauth"
+    assert req.session["next"] == "/admin"
+
+def test_refresh_reauth_preserves_the_csrf_token():
+    now = time.time()
+    req = build_mock_request({
+        "user_id": "admin",
+        "auth_time": now - auth.RECENT_REAUTH_WINDOW_SECONDS - 10,
+        "csrf_token": "existing-token",
+        "session_id": "existing-session",
+    })
+    auth.refresh_reauth(req)
+    assert auth.is_recent_reauth(req) is True
+    assert req.session["csrf_token"] == "existing-token"
+    assert req.session["session_id"] == "existing-session"
 
 def test_csrf_verification():
     req = build_mock_request({
@@ -107,6 +134,7 @@ def test_csrf_verification():
     assert auth.verify_csrf(req, "expected-token") is True
     assert auth.verify_csrf(req, "wrong-token") is False
     assert auth.verify_csrf(req, "") is False
+    assert auth.verify_csrf(req, "wröng-töken") is False
     
     req_no_token = build_mock_request({})
     assert auth.verify_csrf(req_no_token, "expected-token") is False

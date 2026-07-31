@@ -1,20 +1,17 @@
-import time
 from unittest import mock
 
-import httpx
 import pytest
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.admin.routes import admin_routes
 from vcf_ops_mcp.admin import auth
+from vcf_ops_mcp.admin.routes import admin_routes
 from vcf_ops_mcp.app import StructuralAuditMiddleware
 
-from starlette.responses import JSONResponse, HTMLResponse
-from starlette.requests import Request
-from starlette.routing import Route
 
 def create_admin_app(audit_writable: bool = True):
     class MockAuditRepo:
@@ -49,30 +46,17 @@ def test_auth_sources_api_no_fqdn(logged_in_client):
     assert resp.status_code == 200
     assert resp.json() == {"sources": [{"label": "Local users", "value": "LOCAL"}]}
 
-@mock.patch("httpx.AsyncClient.get")
-def test_auth_sources_api_with_fqdn(mock_get):
-    class MockResponse:
-        status_code = 200
-        def json(self):
-            return {"sources": [{"name": "AD"}, {"name": "LDAP"}]}
-            
-    # Need to use an async mock for httpx.AsyncClient.get
-    async def mock_get_coro(*args, **kwargs):
-        return MockResponse()
-        
-    mock_get.side_effect = mock_get_coro
-
+def test_auth_sources_does_not_fetch_an_arbitrary_fqdn():
     app = create_admin_app()
     client = TestClient(app)
     client.get("/admin/test-setup-session")
-    
-    resp = client.get("/admin/auth-sources?fqdn=test.local")
+    with mock.patch("httpx.AsyncClient.get") as outbound:
+        resp = client.get("/admin/auth-sources?fqdn=test.local")
     assert resp.status_code == 200
-    sources = resp.json()["sources"]
-    assert {"label": "Local users", "value": "LOCAL"} in sources
-    assert {"label": "AD", "value": "AD"} in sources
-    assert {"label": "LDAP", "value": "LDAP"} in sources
-    assert sources[0] == {"label": "Local users", "value": "LOCAL"}
+    assert resp.json() == {
+        "sources": [{"label": "Local users", "value": "LOCAL"}]
+    }
+    outbound.assert_not_called()
 
 def test_security_write_fails_closed_when_audit_degraded():
     app = create_admin_app(audit_writable=False)
@@ -94,6 +78,30 @@ def test_security_write_fails_invalid_csrf(logged_in_client):
     resp = logged_in_client.post("/admin/targets", data={"csrf_token": "wrong"}, follow_redirects=False)
     assert resp.status_code == 403
     assert b"CSRF" in resp.content
+
+def test_security_write_fails_non_ascii_csrf(logged_in_client):
+    resp = logged_in_client.post(
+        "/admin/targets",
+        data={"csrf_token": "tökén"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert b"CSRF" in resp.content
+
+def test_degraded_repository_answers_503_not_500():
+    app = create_admin_app()
+    client = TestClient(app)
+    resp = client.get("/admin/login")
+    assert resp.status_code == 503
+    assert b"unavailable" in resp.content
+
+def test_degraded_repository_answers_503_when_logged_in():
+    app = create_admin_app()
+    client = TestClient(app)
+    client.get("/admin/test-setup-session")
+    resp = client.get("/admin")
+    assert resp.status_code == 503
+    assert b"unavailable" in resp.content
 
 def test_security_write_requires_recent_reauth():
     app = create_admin_app()

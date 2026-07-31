@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Admin sign in{% endblock %}
+{% block content %}
+<section class="card" style="max-width: 520px; margin: 0 auto">
+  <h1>Admin sign in</h1>
+  {% if bootstrap_required %}
+  <p class="notice">
+    First-run bootstrap is waiting for the operator-owned password file at
+    <code>{{ bootstrap_path }}</code>. Create it with mode 0600, then sign in
+    as <code>admin</code>. The server hashes the password and removes the file
+    after the first successful initialization attempt.
+  </p>
+  {% endif %}
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/admin/login">
+    <label for="username">Username</label>
+    <input id="username" name="username" value="admin" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

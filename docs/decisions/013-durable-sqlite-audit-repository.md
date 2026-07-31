@@ -1,6 +1,8 @@
 # 013: The audit repository is an append-only SQLite ledger on the /audit volume
 
-- **Status:** accepted
+- **Status:** accepted; Half A (slot-env `SESSION_SECRET`) superseded by
+  record 014, which generates and persists the secret on the `/keys` volume.
+  Everything else in this record stands.
 - **Date:** 2026-07-29
 - **Assignment:** issue #8, first light: build-deploy green end to end including
   the health gate, and `healthz` 200 through
@@ -246,6 +248,10 @@ exist because reconciliation recorded them, which is the invariant working;
 readiness is write capability, and the count is reported for the operator.
 
 ## Half A: `SESSION_SECRET`
+
+Superseded by record 014: the service now generates the secret on first start
+and persists it at `/keys/session_secret`, and the slot `.env` requirement
+below no longer exists. The text is kept as written for the historical record.
 
 The value is authored by hand on the slot by lab-admin and is delivered
 nowhere else. It is not generated, committed, or defaulted anywhere in this

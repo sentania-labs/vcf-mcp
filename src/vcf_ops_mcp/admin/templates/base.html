@@ -1,7 +1,73 @@
-<!DOCTYPE html>
-<html>
-<head><title>VCF Ops MCP Admin</title></head>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}VCF Ops MCP Admin{% endblock %}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      color: #172033;
+      background: #f4f7fb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem 2rem;
+      background: #13233f;
+      color: white;
+    }
+    header a { color: white; }
+    main { width: min(1100px, calc(100% - 2rem)); margin: 2rem auto; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+    .card {
+      min-width: 0;
+      padding: 1.25rem;
+      border: 1px solid #dce3ee;
+      border-radius: 12px;
+      background: white;
+      box-shadow: 0 6px 22px rgb(30 48 80 / 7%);
+    }
+    label { display: block; margin: .8rem 0 .25rem; font-weight: 650; }
+    input, select, button {
+      width: 100%;
+      padding: .7rem;
+      border: 1px solid #aab6c8;
+      border-radius: 7px;
+      font: inherit;
+    }
+    input[type="checkbox"] { width: auto; margin-right: .35rem; }
+    button {
+      margin-top: 1rem;
+      color: white;
+      background: #1768ac;
+      border-color: #1768ac;
+      cursor: pointer;
+    }
+    button.danger { background: #a92f35; border-color: #a92f35; }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { padding: .65rem; border-bottom: 1px solid #e1e6ef; text-align: left; vertical-align: top; }
+    code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .muted { color: #617087; }
+    .error { padding: .75rem; border-radius: 7px; color: #7b151b; background: #ffe7e8; }
+    .notice { padding: .75rem; border-radius: 7px; background: #e8f2ff; }
+    .badge { display: inline-block; padding: .2rem .45rem; border-radius: 999px; background: #edf2f8; }
+    .inline { display: inline; }
+    .inline button { width: auto; margin: 0; padding: .35rem .6rem; }
+  </style>
+</head>
 <body>
-{% block content %}{% endblock %}
+  <header>
+    <strong>Sentania VCF Ops MCP <span class="muted">(unofficial)</span></strong>
+    {% if request.session.get("user_id") %}
+    <nav><a href="/admin">Dashboard</a> · <a href="/admin/audit">Audit</a></nav>
+    {% endif %}
+  </header>
+  <main>{% block content %}{% endblock %}</main>
 </body>
 </html>

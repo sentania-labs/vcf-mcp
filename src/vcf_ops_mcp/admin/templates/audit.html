@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recent audit records</h1>
+<p class="muted">Newest 200 committed rows. Attempts and terminal outcomes remain separate append-only records.</p>
+<section class="card" style="overflow:auto">
+  <table>
+    <thead><tr><th>Time</th><th>Key</th><th>Target</th><th>Tool</th><th>Status</th><th>Error</th><th>Latency</th></tr></thead>
+    <tbody>
+    {% for record in records %}
+      <tr>
+        <td>{{ record.timestamp.isoformat() }}</td>
+        <td><code>{{ record.key_id }}</code></td>
+        <td><code>{{ record.target_id }}</code></td>
+        <td>{{ record.tool_name }}</td>
+        <td>{{ record.status.value }}</td>
+        <td>{{ record.error_code or "" }}</td>
+        <td>{{ record.latency_ms if record.latency_ms is not none else "" }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No MCP tool calls have been recorded.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

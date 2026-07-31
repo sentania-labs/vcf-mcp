@@ -2,7 +2,6 @@ import hashlib
 import os
 import secrets
 import time
-import typing
 
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -54,7 +53,7 @@ def initialize_session(request: Request, user_id: str) -> None:
     request.session["session_id"] = secrets.token_urlsafe(32)
 
 
-def enforce_idle_timeout(request: Request) -> typing.Optional[RedirectResponse]:
+def enforce_idle_timeout(request: Request) -> RedirectResponse | None:
     if "user_id" not in request.session:
         return None
 
@@ -87,16 +86,38 @@ def is_recent_reauth(request: Request) -> bool:
     return (time.time() - auth_time) < RECENT_REAUTH_WINDOW_SECONDS
 
 
-def require_recent_reauth(request: Request) -> typing.Optional[RedirectResponse]:
+def refresh_reauth(request: Request) -> None:
+    """Extend the recent-reauth window without rotating session tokens."""
+    now = time.time()
+    request.session["auth_time"] = now
+    request.session["last_active"] = now
+
+
+def require_recent_reauth(request: Request) -> RedirectResponse | None:
     if not is_recent_reauth(request):
-        # Stash current path to redirect back after re-auth
-        request.session["next"] = str(request.url)
+        # Store only a local path, and only for safe methods. A full URL
+        # would turn this into an open redirect if proxy headers or a future
+        # caller supplied another host, and a POST-only path would land the
+        # post-reauth GET redirect on a 405.
+        path = "/admin"
+        if request.scope.get("method", "").upper() in {"GET", "HEAD"}:
+            candidate = request.scope.get("path")
+            if not isinstance(candidate, str):
+                value = request.url
+                candidate = getattr(value, "path", str(value))
+            if candidate.startswith(("http://", "https://")):
+                candidate = "/" + candidate.split("/", 3)[-1]
+            if candidate.startswith("/"):
+                path = candidate
+        request.session["next"] = path
         return RedirectResponse(url="/admin/reauth", status_code=303)
     return None
 
 
 def verify_csrf(request: Request, submitted_token: str) -> bool:
     expected = request.session.get("csrf_token")
-    if not expected or not submitted_token:
+    if not isinstance(expected, str) or not expected or not submitted_token:
         return False
-    return secrets.compare_digest(expected, submitted_token)
+    return secrets.compare_digest(
+        expected.encode("utf-8"), submitted_token.encode("utf-8")
+    )

@@ -68,7 +68,7 @@ class ReadAdapter:
             "projection": self.projection_version,
             "outbound_contract": self.read_contract.contract,
             "audited_handler": audited_handler,
-            "summary": self.summary,
+            "adapter.summary": self.summary,
             **self.read_contract.registration_extensions(),
         }
 

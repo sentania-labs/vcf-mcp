@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width: 520px; margin: 0 auto">
+  <h1>Confirm your password</h1>
+  <p class="muted">Sensitive configuration changes require recent authentication.</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/admin/reauth">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="password">Admin password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Continue</button>
+  </form>
+</section>
+{% endblock %}

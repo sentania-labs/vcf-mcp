@@ -27,6 +27,7 @@ WORKDIR /app
 
 COPY --from=builder /build/wheels /wheels
 RUN pip install --no-cache /wheels/*
+COPY --chown=appuser:appuser skills/ /app/skills/
 
 # Set up volumes
 RUN mkdir -p /data /keys /audit && \

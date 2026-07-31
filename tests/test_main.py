@@ -9,8 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -28,8 +33,10 @@ from vcf_ops_mcp.contracts import (
 )
 from vcf_ops_mcp.main import create_production_app
 
-
-SECRET_ENVIRONMENT = {"SESSION_SECRET": "test-secret-not-a-real-value"}
+SECRET_ENVIRONMENT = {
+    "SESSION_SECRET": "synthetic-test-secret-with-more-than-32-bytes"
+}
+UVICORN_STARTUP_TIMEOUT_SECONDS = 30
 
 
 def attempt(correlation_id: str) -> AuditRecord:
@@ -52,8 +59,24 @@ class ProductionAppTests(unittest.TestCase):
 
     def environment(self, **extra: str) -> dict[str, str]:
         return {
-            **SECRET_ENVIRONMENT,
             "AUDIT_DB_PATH": str(self.root / "audit" / "audit.sqlite3"),
+            "SESSION_SECRET_PATH": str(
+                self.root / "keys" / "session_secret"
+            ),
+            "AUDIT_DIGEST_KEY_PATH": str(
+                self.root / "keys" / "audit_digest_key"
+            ),
+            "CONFIG_DB_PATH": str(self.root / "data" / "config.sqlite3"),
+            "CREDENTIAL_KEYRING_PATH": str(
+                self.root / "keys" / "credential_keyring.json"
+            ),
+            "ADMIN_BOOTSTRAP_PASSWORD_FILE": str(
+                self.root / "keys" / "admin_bootstrap_password"
+            ),
+            "SKILLS_PATH": str(
+                Path(__file__).resolve().parents[1] / "skills"
+            ),
+            "PUBLIC_BASE_URL": "http://testserver",
             **extra,
         }
 
@@ -109,12 +132,141 @@ class ProductionAppTests(unittest.TestCase):
         self.assertIs(body["audit_writable"], False)
         self.assertIsNone(body["unreconciled_outcome_unknown_count"])
 
-    def test_a_missing_session_secret_still_fails_fast(self) -> None:
+    def test_a_missing_session_secret_is_generated_and_persisted(self) -> None:
         environment = self.environment()
-        environment.pop("SESSION_SECRET")
         with mock.patch.dict(os.environ, environment, clear=True):
-            with self.assertRaises(RuntimeError):
-                create_production_app()
+            first = create_production_app()
+            path = Path(environment["SESSION_SECRET_PATH"])
+            first_value = path.read_text()
+            second = create_production_app()
+            second_value = path.read_text()
+            with TestClient(first) as client:
+                first_health = client.get("/healthz")
+            with TestClient(second) as client:
+                second_health = client.get("/healthz")
+        self.assertEqual(first_value, second_value)
+        self.assertGreaterEqual(len(first_value.encode()), 32)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(first_health.status_code, 200)
+        self.assertEqual(second_health.status_code, 200)
+
+    def test_an_unwritable_session_secret_path_reports_503(self) -> None:
+        blocker = self.root / "secret-blocker"
+        blocker.write_text("not a directory")
+        environment = self.environment(
+            SESSION_SECRET_PATH=str(blocker / "session_secret")
+        )
+        with mock.patch.dict(os.environ, environment, clear=True):
+            app = create_production_app()
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        self.assertIs(
+            response.json()["session_secret_persistent"], False
+        )
+
+    def test_audit_digest_key_survives_session_secret_rotation(self) -> None:
+        environment = self.environment()
+        key_path = Path(environment["AUDIT_DIGEST_KEY_PATH"])
+        with mock.patch.dict(os.environ, environment, clear=True):
+            first = create_production_app()
+            first_key = key_path.read_bytes()
+            with TestClient(first) as client:
+                first_health = client.get("/healthz")
+        rotated = self.environment(
+            SESSION_SECRET="rotated-synthetic-secret-with-more-than-32-bytes"
+        )
+        with mock.patch.dict(os.environ, rotated, clear=True):
+            second = create_production_app()
+            second_key = key_path.read_bytes()
+            with TestClient(second) as client:
+                second_health = client.get("/healthz")
+        self.assertEqual(first_key, second_key)
+        self.assertEqual(len(first_key), 32)
+        self.assertEqual(key_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(first_health.status_code, 200)
+        self.assertEqual(second_health.status_code, 200)
+
+    def test_an_unwritable_audit_digest_key_path_reports_503(self) -> None:
+        blocker = self.root / "digest-blocker"
+        blocker.write_text("not a directory")
+        environment = self.environment(
+            AUDIT_DIGEST_KEY_PATH=str(blocker / "audit_digest_key")
+        )
+        with mock.patch.dict(os.environ, environment, clear=True):
+            app = create_production_app()
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        body = response.json()
+        self.assertIs(body["ready"], False)
+        self.assertIs(body["mcp_ready"], False)
+
+    def test_real_uvicorn_factory_path_starts_without_session_secret(
+        self,
+    ) -> None:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        environment = {
+            **os.environ,
+            **self.environment(),
+        }
+        environment.pop("SESSION_SECRET", None)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "vcf_ops_mcp.main:create_production_app",
+                "--factory",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        response_status = None
+        exited_early = False
+        output = ""
+        try:
+            deadline = (
+                time.monotonic() + UVICORN_STARTUP_TIMEOUT_SECONDS
+            )
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    exited_early = True
+                    break
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.5
+                    ) as response:
+                        response_status = response.status
+                    break
+                except OSError:
+                    time.sleep(0.1)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                output, _ = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output, _ = process.communicate(timeout=5)
+
+        if exited_early:
+            self.fail(f"uvicorn exited before health was ready:\n{output}")
+        if response_status is None:
+            self.fail(
+                "uvicorn stayed alive but health was not ready within "
+                f"{UVICORN_STARTUP_TIMEOUT_SECONDS} seconds:\n{output}"
+            )
+        self.assertEqual(response_status, 200)
 
 
 class HealthGateTests(unittest.TestCase):

@@ -10,7 +10,7 @@ jobs:
   test:
     name: CI Pipeline
     runs-on: [self-hosted]
-    if: github.repository == 'sentania-labs/vcf-ops-mcp' # fork-gated
+    if: github.repository == 'sentania-labs/vcf-ops-mcp' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) # fork-gated
     steps:
       - uses: actions/checkout@v4
 
@@ -18,27 +18,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: 'pip'
+          # Do not enable setup-python's pip cache on this heterogeneous
+          # self-hosted pool. Some runners have an unwritable inherited pip
+          # cache directory, and setup-python turns that optional accelerator
+          # into a hard failure before dependency installation begins.
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip hatchling
-          pip install -e .[test]
+          python -m pip install -e .[test]
 
-      - name: Run Lint (Incomplete)
-        run: echo "Linting step not yet implemented"
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
 
       - name: Run Tier 1 and 2 Tests
-        run: pytest tests/
-
-      - name: Run Fixture Scanner (Incomplete)
-        run: echo "Fixture scanner step not yet implemented"
-
-      - name: Fixture Freshness Check (Incomplete)
-        run: echo "Fixture freshness step not yet implemented"
-
-      - name: Skills Index Check (Incomplete)
-        run: echo "Skills index step not yet implemented"
+        # These tests include fixture safety/freshness and exact skills-index
+        # regeneration checks. The live tier remains explicitly opt-in.
+        run: python -m pytest tests/
 
   build:
     name: Build and Push
@@ -96,23 +92,9 @@ jobs:
             exit 1
           fi
 
-      # Two env files, two owners, and the split is load-bearing.
-      #
-      # The slot `.env` is authored by hand on the host and holds SESSION_SECRET
-      # (see deploy/.env.example). This job must never write it. It used to scp
-      # a one-line file straight over it, which wiped the secret out on every
-      # deploy and crash-looped the container.
-      #
-      # `images.env` is the opposite: CI owns it, the host owner never edits it,
-      # and it carries nothing but the pinned digest.
-      #
-      # BOTH --env-file flags are required on EVERY compose invocation below,
-      # which is why they live in one variable rather than being retyped. Do not
-      # "simplify" a call back to a bare `docker compose`: `--env-file` replaces
-      # Compose's implicit `.env` load rather than adding to it, `images.env` is
-      # never auto-loaded at all, and a call missing them fails no differently
-      # from a working one. It just drops the secret and the digest, so the
-      # fail-fast `${VAR:?}` interpolations abort the run.
+      # CI owns images.env, which carries only the pinned image digest. Runtime
+      # secrets are generated or consumed on the mounted /keys volume and are
+      # never deployment environment values.
       - name: Deploy to slot and verify health
         env:
           DEPLOY_KEY: ${{ secrets.DOCKER_DEPLOY_KEY }}
@@ -130,7 +112,7 @@ jobs:
           printf 'VCF_OPS_MCP_IMAGE=ghcr.io/sentania-labs/vcf-ops-mcp@%s\n' "$IMAGE_DIGEST" > "$IMAGES_ENV_PATH"
           cat "$IMAGES_ENV_PATH"
 
-          COMPOSE="docker compose --project-directory $SLOT --env-file $SLOT/.env --env-file $SLOT/images.env"
+          COMPOSE="docker compose --project-directory $SLOT --env-file $SLOT/images.env"
 
           scp -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -O -i "$KEY_PATH" \
             deploy/compose.yml "$DEPLOY_HOST:$SLOT/docker-compose.yml"
@@ -140,17 +122,10 @@ jobs:
           # (see the lab container host contract). It permits scp -O under the
           # slot directory and `docker compose --project-directory <slot>
           # [--env-file ...] {pull,up -d,down,ps,restart,logs}`, and nothing
-          # else: no `cd`, no heredocs, no `test`, no shell metacharacters. Any
-          # probe of the slot filesystem added here will be rejected with
-          # "deploy-wrapper: command not allowed" before it runs. So the missing
-          # `.env` case is detected by letting Compose fail on it and adding the
-          # guidance on this side, rather than by asking the host anything.
+          # else: no `cd`, no heredocs, no `test`, no shell metacharacters.
           if ! ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \
             "$DEPLOY_HOST" "$COMPOSE pull"; then
-            echo "Compose pull failed. If it reported a missing env file, the" >&2
-            echo "host-owned $SLOT/.env does not exist yet: create it by hand" >&2
-            echo "from deploy/.env.example (SESSION_SECRET is required)." >&2
-            echo "CI never writes that file." >&2
+            echo "Compose pull failed for the pinned image." >&2
             exit 1
           fi
           ssh -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$KEY_PATH" \

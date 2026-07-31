@@ -1,94 +1,191 @@
+"""Starlette parent application for health, admin, and MCP surfaces."""
+
+from __future__ import annotations
+
 import os
-import typing
+
 from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, HTMLResponse
-from starlette.routing import Route
-from starlette.middleware.base import BaseHTTPMiddleware
-
-from vcf_ops_mcp.contracts import AuditRepository
-
-async def healthz(request: Request) -> JSONResponse:
-    """Report readiness, which is exactly audit write capability.
-
-    200 if and only if the audit store accepts a durable write. Every other
-    condition is 503. A server that cannot record what it did must not be
-    routed traffic, per the constitution's audit invariant, so this endpoint
-    never reports ready on an unproven store and never treats "the store could
-    not be queried" as "the store is fine".
-    """
-
-    audit_repo: typing.Optional[AuditRepository] = getattr(request.app.state, "audit_repository", None)
-
-    if audit_repo is None:
-        return JSONResponse(
-            {
-                "ready": False,
-                "audit_writable": False,
-                "unreconciled_outcome_unknown_count": None,
-                "error": "Audit repository is unavailable",
-            },
-            status_code=503,
-        )
-
-    try:
-        is_writable = await audit_repo.is_writable()
-    except Exception:
-        is_writable = False
-
-    # An unreadable count must never be reported as zero. Null says "unknown",
-    # and readiness is already false whenever the store cannot be reached.
-    try:
-        unreconciled_count: typing.Optional[int] = await audit_repo.unreconciled_attempt_count()
-    except Exception:
-        unreconciled_count = None
-
-    body: dict[str, object] = {
-        "ready": is_writable,
-        "audit_writable": is_writable,
-        "unreconciled_outcome_unknown_count": unreconciled_count,
-    }
-    if not is_writable:
-        body["error"] = "Audit repository is not writable"
-    return JSONResponse(body, status_code=200 if is_writable else 503)
-
 from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
 
 from vcf_ops_mcp.admin.routes import admin_routes
+from vcf_ops_mcp.contracts import AuditRepository
+from vcf_ops_mcp.mcp_server import McpSurface
+from vcf_ops_mcp.runtime_repository import RuntimeRepository
+
+
+async def healthz(request: Request) -> JSONResponse:
+    """Report ready only when every production persistence dependency works."""
+
+    audit_repo: AuditRepository | None = getattr(
+        request.app.state, "audit_repository", None
+    )
+    if audit_repo is None:
+        audit_writable = False
+        unreconciled_count: int | None = None
+    else:
+        try:
+            audit_writable = await audit_repo.is_writable()
+        except Exception:
+            audit_writable = False
+        try:
+            unreconciled_count = (
+                await audit_repo.unreconciled_attempt_count()
+            )
+        except Exception:
+            unreconciled_count = None
+
+    runtime_repo: RuntimeRepository | None = getattr(
+        request.app.state, "runtime_repository", None
+    )
+    if runtime_repo is None:
+        configuration_ready = getattr(
+            request.app.state, "configuration_ready", True
+        )
+    else:
+        try:
+            configuration_ready = await runtime_repo.is_ready()
+        except Exception:
+            configuration_ready = False
+    session_secret_persistent = bool(
+        getattr(request.app.state, "session_secret_persistent", True)
+    )
+    mcp_ready = bool(getattr(request.app.state, "mcp_ready", True))
+    ready = (
+        audit_writable
+        and configuration_ready
+        and session_secret_persistent
+        and mcp_ready
+    )
+    body: dict[str, object] = {
+        "ready": ready,
+        "audit_writable": audit_writable,
+        "configuration_ready": configuration_ready,
+        "session_secret_persistent": session_secret_persistent,
+        "mcp_ready": mcp_ready,
+        "unreconciled_outcome_unknown_count": unreconciled_count,
+    }
+    if not ready:
+        failed = [
+            name
+            for name, healthy in (
+                ("audit", audit_writable),
+                ("configuration", configuration_ready),
+                ("session_secret", session_secret_persistent),
+                ("mcp", mcp_ready),
+            )
+            if not healthy
+        ]
+        body["error"] = f"Unavailable dependencies: {', '.join(failed)}"
+    return JSONResponse(body, status_code=200 if ready else 503)
+
+
+async def unavailable_mcp(_request: Request) -> JSONResponse:
+    return JSONResponse(
+        {"error": "MCP runtime is unavailable"}, status_code=503
+    )
+
 
 class StructuralAuditMiddleware(BaseHTTPMiddleware):
+    """Refuse security-relevant admin writes while audit storage is degraded."""
+
+    _SECURITY_WRITE_PREFIXES = (
+        "/admin/targets",
+        "/admin/keys",
+    )
+
     async def dispatch(self, request: Request, call_next):
-        SECURITY_WRITE_ROUTES = ["/admin/targets"]
-        if request.url.path in SECURITY_WRITE_ROUTES and request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-            audit_repo = getattr(request.app.state, "audit_repository", None)
-            is_writable = False
-            if audit_repo:
-                is_writable = await audit_repo.is_writable()
+        is_security_write = (
+            request.method in {"POST", "PUT", "DELETE", "PATCH"}
+            and request.url.path.startswith(self._SECURITY_WRITE_PREFIXES)
+        )
+        if is_security_write:
+            audit_repo = getattr(
+                request.app.state, "audit_repository", None
+            )
+            try:
+                is_writable = bool(
+                    audit_repo and await audit_repo.is_writable()
+                )
+            except Exception:
+                is_writable = False
             if not is_writable:
-                return HTMLResponse("Audit is degraded; security-relevant writes are disabled.", status_code=503)
+                return HTMLResponse(
+                    "Audit is degraded; security-relevant writes are disabled.",
+                    status_code=503,
+                )
         return await call_next(request)
 
-def create_app(audit_repository: typing.Optional[AuditRepository] = None) -> Starlette:
-    mcp = FastMCP("Sentania VCF Ops MCP (unofficial)")
-    
-    secret_key = os.environ.get("SESSION_SECRET")
+
+def create_app(
+    audit_repository: AuditRepository | None = None,
+    *,
+    session_secret: str | None = None,
+    session_secret_persistent: bool = True,
+    runtime_repository: RuntimeRepository | None = None,
+    mcp_surface: McpSurface | None = None,
+    configuration_ready: bool = True,
+    mcp_ready: bool | None = None,
+    session_https_only: bool = True,
+) -> Starlette:
+    """Compose the parent app while retaining explicit test seams."""
+
+    secret_key = session_secret or os.environ.get("SESSION_SECRET")
     if not secret_key:
-        raise RuntimeError("SESSION_SECRET must be set for production session encryption")
+        raise RuntimeError(
+            "a session secret must be injected by the production composition root"
+        )
+
+    routes: list[Route | Mount] = [
+        Route("/healthz", endpoint=healthz, methods=["GET"]),
+        *admin_routes,
+    ]
+    lifespan = None
+    if mcp_surface is None:
+        routes.extend(
+            [
+                Route(
+                    "/mcp",
+                    endpoint=unavailable_mcp,
+                    methods=["GET", "POST", "DELETE"],
+                ),
+                Route(
+                    "/mcp/{path:path}",
+                    endpoint=unavailable_mcp,
+                    methods=["GET", "POST", "DELETE"],
+                ),
+            ]
+        )
+    else:
+        routes.append(Mount("/mcp", app=mcp_surface.app))
+        lifespan = mcp_surface.app.router.lifespan_context
 
     app = Starlette(
-        routes=[
-            Route("/healthz", endpoint=healthz, methods=["GET"]),
-        ] + admin_routes,
+        routes=routes,
+        lifespan=lifespan,
         middleware=[
-            Middleware(SessionMiddleware, secret_key=secret_key),
-            Middleware(StructuralAuditMiddleware)
-        ]
+            Middleware(
+                SessionMiddleware,
+                secret_key=secret_key,
+                session_cookie="vcf_ops_admin",
+                max_age=15 * 60,
+                same_site="strict",
+                https_only=session_https_only,
+            ),
+            Middleware(StructuralAuditMiddleware),
+        ],
     )
-    
-    # Mount MCP streamable HTTP transport
-    app.mount("/mcp", mcp.streamable_http_app())
-    
     app.state.audit_repository = audit_repository
+    app.state.runtime_repository = runtime_repository
+    app.state.configuration_ready = configuration_ready
+    app.state.session_secret_persistent = session_secret_persistent
+    app.state.mcp_ready = (
+        mcp_surface is not None or runtime_repository is None
+        if mcp_ready is None
+        else mcp_ready
+    )
     return app

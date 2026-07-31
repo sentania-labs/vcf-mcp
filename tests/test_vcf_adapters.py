@@ -374,7 +374,11 @@ class AdapterDeclarationTests(unittest.TestCase):
                 self.assertEqual(mapping["schema_version"], 1)
                 self.assertEqual(mapping["capability"], mapping["key_scope"])
                 # Family-qualified extensions, never new core keys.
-                extras = set(mapping) - REQUIRED_REGISTRATION_CORE - {"summary"}
+                extras = (
+                    set(mapping)
+                    - REQUIRED_REGISTRATION_CORE
+                    - {"adapter.summary"}
+                )
                 self.assertTrue(all(key.startswith("vcf.") for key in extras), extras)
 
     def test_tool_names_and_contract_names_are_unique(self) -> None:
