@@ -1,23 +1,7 @@
 # CLAUDE.md, vcf-ops-mcp
 
-Role-neutral constitution for vcf-ops-mcp. Every resident of this repo
-(human or agent, whatever role it is running under) must honor these rules.
-
-## Role briefs are injected, never auto-loaded
-
-This constitution is role-neutral on purpose. It says what is true for
-everyone. It does not say what an orchestrator does, or what a worker does.
-
-Role briefs live in the framework's `roles/` (`roles/orchestrator.md`,
-`roles/claude-worker.md`, `roles/codex-worker.md`, and one per additional
-harness this project seats). They are never auto-loaded by any harness. The
-dispatcher injects the relevant brief at dispatch time.
-
-If you are reading this file and no role brief was injected into your
-session, you are a plain interactive session. Assume neither role. Do not act
-as the orchestrator, and do not assume a worker's branch prefix or sign-off
-obligations apply to you. Ask before taking action that a role brief would
-otherwise govern.
+Constitution for vcf-ops-mcp. Every agent working in this repo must honor
+these rules.
 
 ## Project overview
 
@@ -36,7 +20,7 @@ baked into the image or CI. See `docs/SPEC.md` for the full deliverable
 definition, tool families, phases, and gates.
 
 This is an unofficial, personal-lab project. The server self-describes as
-"Sentania VCF Ops MCP (unofficial)" in its MCP server-info. No resident
+"Sentania VCF Ops MCP (unofficial)" in its MCP server-info. No agent
 uses Broadcom or VMware branding in a way that implies this is an official
 offering.
 
@@ -46,7 +30,7 @@ offering.
   transcripts.** VCF Ops credentials, API keys, tokens, and session
   material are runtime data configured post-deployment through the admin
   UI and held in the server's encrypted-at-rest store on a volume. Tests
-  use synthetic fixtures and mock endpoints. A resident about to commit,
+  use synthetic fixtures and mock endpoints. An agent about to commit,
   print, or echo anything resembling a real credential stops and asks; it
   does not "clean up" by force-deleting from history.
 - **Read-only is the default posture, per target.** A newly registered
@@ -62,7 +46,7 @@ offering.
   appliance (`vcf-lab-operations-devel.int.sentania.net`) is the
   development and action-testing target.
 - **Live-appliance access during development is read-only recon against
-  devel only.** No resident executes actions against any live appliance
+  devel only.** No agent executes actions against any live appliance
   until Scott's Phase 2 gate approval, and never against prod. Verifying
   an endpoint's shape by reading it from devel is allowed and encouraged;
   mutating anything on a live appliance is not.
@@ -83,33 +67,22 @@ This is a hard rule across the whole repo.
 
 ## Workspace conventions
 
-- The default branch is `main`. Every dispatch uses a feature branch plus a
-  pull request, except the round-branch model below.
-- Branch prefixes are per-resident: `claude/*`, `codex/*`, `agy/*` (this
-  project seats claude-worker, codex-worker, and agy-worker as its three
-  doers, per Scott's standard doer-composition ruling; cursor is seated
-  read-only as critic, tiebreaker-only on a 2-2 four-ballot split).
-- Every commit an agent authors carries a `Co-authored-by:` trailer naming
-  the resident that wrote it, so authorship survives squash merges.
-- No self-merge and no self-approval. The resident that wrote a change never
-  merges it and never signs off on it as its own reviewer. Merge authority
-  belongs to the orchestrator.
-- Per the framework's round-branch integration model: doers commit to
-  prefixed branches off one round branch, the orchestrator merges reviewed
-  doer branches into it locally, and the round branch produces exactly one
-  PR to `main` with one external review round (Codex, per sentania-labs
-  convention: one review round satisfies the gate, no re-review loops).
-- An external review (Codex) must pass, and its findings must be addressed
-  in the same PR, before that PR merges.
+- The default branch is `main`. Never commit directly to it. One worker per
+  task, dispatched with a written brief, works on its own branch in an
+  isolated worktree, and opens one pull request to `main`.
+- No self-merge and no self-approval. The author of a change never merges it
+  and never signs off on it as its own reviewer; it is reviewed before the PR
+  opens.
+- One external review round (Codex, per sentania-labs convention) on the PR.
+  Its findings are addressed in the same PR, no re-review loops.
 - Changes touching protected paths (enumerated in
   `.github/protected-paths.txt`) must reference a `docs/decisions/NNN-*.md`
-  record signed by every worker it names as dispatched. See
-  `docs/decisions/README.md`.
-- Escalate to the human principal rather than deciding as a team: engine/
-  runtime changes, architecture changes, new dependencies, anything that
-  widens the action blast radius or weakens an invariant above, and edits
-  to this constitution. Style, implementation detail, and refactors are
-  the team's call. See `roles/orchestrator.md`'s "Escalate" section.
+  record. See `docs/decisions/README.md`.
+- Escalate to the human principal rather than guessing: engine/runtime
+  changes, architecture changes, new dependencies, anything that widens the
+  action blast radius or weakens an invariant above, and edits to this
+  constitution. Style, implementation detail, and refactors are the
+  implementer's call.
 - CI is fork-gated: PR jobs run only for branches pushed into this repo,
   never for forks.
 
