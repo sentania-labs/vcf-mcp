@@ -7,9 +7,10 @@
 - **Lane:** direct captain instruction (no worker round)
 - **Workers dispatched:** None (directive authority)
 - **Authority:** a direct captain instruction, 2026-08-24: the foundry team
-  that produced `TEAM-STATE.md` and `.team/` no longer exists, so retire the
-  apparatus rather than keep maintaining it, and remove the instructions in
-  `AGENTS.md`/`CLAUDE.md` that still described operating as that team.
+  that produced `TEAM-STATE.md` and the team-tracking directory (formerly
+  `.team`, no longer present) no longer exists, so retire the apparatus rather
+  than keep maintaining it, and remove the instructions in `AGENTS.md`/
+  `CLAUDE.md` that still described operating as that team.
 
 ## Context
 
@@ -48,9 +49,10 @@ loops.**
 
 ### Removed
 
-- `TEAM-STATE.md` (1850 lines of retired orchestrator round history) and
-  `.team/` as a live directory, including `markers/`, `blocked/`, `votes/`,
-  and `team-config.yaml`.
+- `TEAM-STATE.md` (1850 lines of retired orchestrator round history) and the
+  team-tracking directory itself as a live directory (`markers/`, `blocked/`,
+  `votes/`, `prompts/`, `signoffs/`, `provenance.md`, `team-config.yaml`, and
+  the rest), other than the files relocated below.
 - The `AGENTS.md`/`CLAUDE.md` section describing role briefs injected from a
   `roles/` directory, and the instruction to assume neither the orchestrator
   nor the worker role absent an injected brief. `roles/` was never checked
@@ -59,8 +61,7 @@ loops.**
   tied to named doer seats, the cursor critic seat and its tiebreaker vote on
   a 2-2 four-ballot split, the round-branch integration model (doers
   committing to prefixed branches off one round branch that the orchestrator
-  merges), and the pre-integration sign-off marker requirement under
-  `.team/signoffs/`.
+  merges), and the pre-integration sign-off marker requirement.
 - The reference to `TEAM-STATE.md` as the orchestrator's durable state file,
   and the `docs/decisions/TEMPLATE.md` field asking a new record to cite it.
 - The word "resident" (foundry seat language) in the two remaining invariant
@@ -89,23 +90,45 @@ under one-worker-per-task is not something this record settles: the bullet
 was dropped rather than kept on a guess. If it should still apply, that is a
 deliberate addition, not a restoration.
 
-## Where the historical sign-off evidence now lives
+## Where the historical evidence now lives
 
-Decision records 001 through 007 cite specific files under the old
-`.team/signoffs/` as the independently-checkable sign-off evidence for those
-decisions, and `.team/provenance.md` was the only surviving mapping from the
-git SHAs those records cite to the in-tree copies preserved under
-`docs/artifacts/`. Deleting `.team/` outright would have left those governing
-records pointing at nothing.
+The rule applied here, after an earlier pass at this deletion missed it: any
+material under the retired team-tracking directory that a decision record
+cites is archived, not deleted; only material nothing in `docs/decisions/`
+cites is deleted outright. Concretely, extracting every team-tracking-directory
+path referenced anywhere in `docs/decisions/` at the branch point and checking
+which of those paths actually existed there yields exactly these:
 
-Both are relocated, not deleted: `.team/signoffs/` is now
-`docs/history/signoffs/`, and `.team/provenance.md` is now
-`docs/history/provenance.md`. Each carries an added note marking it archival
-and pointing back to this record. The path citations in decision records 001
-through 007 are updated to the new location so nothing dangles. `docs/history/`
-is not a live process directory; nothing writes to it going forward, and
-nothing in `AGENTS.md`/`CLAUDE.md` instructs an agent to use it. It exists
-only so a signed decision record's evidence stays checkable.
+- `signoffs/` (all files): decision records 001 through 007 cite specific
+  files here as the independently-checkable sign-off evidence for those
+  decisions.
+- `provenance.md`: the only surviving mapping from the git SHAs those records
+  cite to the in-tree copies preserved under `docs/artifacts/`.
+- `team-config.yaml`: decision record 007 cites it as evidence of the critic
+  seating that made a tiebreaker vote unnecessary for that round's ballots.
+- `votes/r3-critic-skills.md`: decision records 009 and 010 cite it as the
+  critic's verbatim tiebreaking vote and reproduce it.
+- `blocked/fleet-caddy-slot-config.md`: decision record 012 cites it as the
+  blocker it closed out.
+- `prompts/r4-assignment.md`: decision record 011 cites it as the scoping
+  document for that round's assignment.
+
+Every one of these is relocated, unedited, to `docs/history/`, preserving its
+filename and relative path (so `signoffs/README.md` becomes
+`docs/history/signoffs/README.md`, `provenance.md` becomes
+`docs/history/provenance.md`, and so on). Each relocated file that serves as
+its own directory's index carries an added note marking it archival and
+pointing back to this record. The path citations in decision records 007,
+009, 010, 011, and 012, and the sign-off citations in 001 through 007, are
+updated to the new location so nothing dangles.
+
+Everything else that lived under the retired team-tracking directory and that
+no decision record cites (markers, prompts other than `r4-assignment.md`,
+other votes, other blocked items) is deleted outright, not archived.
+
+`docs/history/` is not a live process directory; nothing writes to it going
+forward, and nothing in `AGENTS.md`/`CLAUDE.md` instructs an agent to use it.
+It exists only so a signed decision record's evidence stays checkable.
 
 ## Dissent
 

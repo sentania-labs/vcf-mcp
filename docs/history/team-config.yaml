@@ -1,0 +1,20 @@
+# Team configuration for vcf-ops-mcp.
+# Read by bin/team-run as a "has this project actually been set up" guard,
+# and by the orchestrator role brief for the seated roster and roadmap
+# pointer.
+
+doers:
+  - claude
+  - codex
+  - agy
+
+critic:
+  seat: cursor
+  active: true
+  role: tiebreaker-only  # summoned only on a 2-2 four-ballot split, no standing synthesis vote
+
+roadmap: docs/SPEC.md
+
+protected_paths: .github/protected-paths.txt
+
+mailbox: .pka/inbound/

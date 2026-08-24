@@ -196,7 +196,9 @@ are reachable from this round branch.
 | agy-worker | `f136b2aa3a13f3f0637e4d5215b37e18df35fbe8` | `4fd8004bb909eb841a1d4e57bcae5bb0c884e366` | `75bfc1f67e049d72a7e0011b54c93063ab7a144d` | `612bbe6ce7e33be9dabcb153be799c6b1b4ec193` |
 
 Orchestrator ballot: `docs/proposals/2/ballots/orchestrator-r3-p1-ballot.md`.
-Critic vote: `.team/votes/r3-critic-skills.md`, reproduced verbatim below.
+Critic vote: `docs/history/votes/r3-critic-skills.md` (relocated, unedited,
+from the now-deleted team-tracking directory; see decision record 015),
+reproduced verbatim below.
 
 ## Context
 

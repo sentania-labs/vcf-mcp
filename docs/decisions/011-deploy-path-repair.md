@@ -4,7 +4,9 @@
 - **Date:** 2026-07-27
 - **Assignment:** GitHub issue sentania-labs/vcf-ops-mcp#4, "Post-merge deploy
   fails: workflow missing permissions block, image push denied", routed by the
-  GitHub-issue pipeline. Scoped in `.team/prompts/r4-assignment.md`.
+  GitHub-issue pipeline. Scoped in `docs/history/prompts/r4-assignment.md`
+  (relocated from the now-deleted team-tracking directory; see decision
+  record 015).
 - **Orchestrator run:** `gh-issue-4-triage-20260727-013122`
 - **Lane:** full protocol
 - **Workers dispatched:** claude-worker, codex-worker, agy-worker

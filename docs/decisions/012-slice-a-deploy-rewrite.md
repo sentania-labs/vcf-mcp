@@ -111,7 +111,9 @@ timeout and re-runs.
   registered against something else, the symptom is a continued 503 with a
   running container, which is distinguishable from Slice B's 503 by
   `docker compose ps`.
-- **`.team/blocked/fleet-caddy-slot-config.md` is resolved.** TLS terminates
+- **`docs/history/blocked/fleet-caddy-slot-config.md` is resolved** (relocated
+  from the now-deleted team-tracking directory; see decision record 015). TLS
+  terminates
   and the proxy answers 503 rather than dying at Client Hello. Closed out this
   round.
 

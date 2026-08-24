@@ -155,8 +155,8 @@ must split from `report:run`, and that its alert fingerprint was underspecified.
 
 Four contested questions, four ballots each: orchestrator, claude-worker,
 codex-worker, agy-worker. **No question split 2-2, so the critic seat was
-correctly not invoked**, per `.team/team-config.yaml`, which seats cursor as
-tiebreaker-only.
+correctly not invoked**, per `docs/history/team-config.yaml`, which seats
+cursor as tiebreaker-only.
 
 | Question | claude | codex | agy | orchestrator | Result |
 | --- | --- | --- | --- | --- | --- |
