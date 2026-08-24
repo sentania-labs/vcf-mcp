@@ -551,9 +551,9 @@ are authoritative and independently checkable:
 
 | Signer | Signature artifact | Commit |
 | --- | --- | --- |
-| claude-worker | `.team/signoffs/claude-worker-r2-records.md` | `a307102` |
-| codex-worker | `.team/signoffs/codex-worker-r2-records.md` | `10c9282` |
-| agy-worker | `.team/signoffs/agy-worker-r2-records.md` | `726daf4` |
+| claude-worker | `docs/history/signoffs/claude-worker-r2-records.md` | `a307102` |
+| codex-worker | `docs/history/signoffs/codex-worker-r2-records.md` | `10c9282` |
+| agy-worker | `docs/history/signoffs/agy-worker-r2-records.md` | `726daf4` |
 
 Each signer confirms in its artifact that its own dissent, where it has one, is
 quoted accurately and was not softened or truncated. All three signed without
