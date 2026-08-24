@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main", "round/*" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions: {}
+
+jobs:
+  test:
+    name: CI Pipeline
+    runs-on: lab
+    if: github.repository == 'sentania-labs/vcf-mcp' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) # fork-gated
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # Do not enable setup-python's pip cache on this heterogeneous
+          # lab pool. Some runners have an unwritable inherited pip
+          # cache directory, and setup-python turns that optional accelerator
+          # into a hard failure before dependency installation begins.
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip hatchling
+          python -m pip install -e '.[test]'
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
+
+      - name: Run Tier 1 and 2 Tests
+        # These tests include fixture safety/freshness and exact skills-index
+        # regeneration checks. The live tier remains explicitly opt-in.
+        run: python -m pytest tests/
+
+  build:
+    name: Build and Push
+    needs: test
+    runs-on: lab
+    if: github.event_name == 'push' && github.repository == 'sentania-labs/vcf-mcp'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/sentania-labs/vcf-mcp:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}

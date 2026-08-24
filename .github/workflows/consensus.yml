@@ -25,7 +25,7 @@ jobs:
     # Fork-gated: PR jobs run only for branches pushed into this repo, never
     # for forks.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: lab
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
   consensus:
     name: consensus gate (informational)
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: lab
 
     steps:
       - uses: actions/checkout@v4

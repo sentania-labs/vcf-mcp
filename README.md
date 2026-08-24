@@ -59,10 +59,10 @@ A ready response is HTTP 200 and reports all four dependencies as true:
 `mcp_ready`. An unavailable audit, configuration, key, or MCP dependency keeps
 the process diagnosable but returns HTTP 503.
 
-The production slot uses [deploy/compose.yml](deploy/compose.yml), the external
-`docker-slots` network, and the same three persistent volumes. CI supplies only
-`images.env`, which pins the image digest. Runtime secrets never pass through
-CI or the compose environment.
+The lab deployment owns its image pin and rollout. The reference
+[deploy/compose.yml](deploy/compose.yml) retains the external `docker-slots`
+network and the same three persistent volumes, but this repository does not
+deploy it. Runtime secrets never pass through CI or the compose environment.
 
 ## First admin sign-in
 
