@@ -1,10 +1,7 @@
-# Slot compose file for vcf-ops-mcp, deployed to
-# /srv/services/vcf-ops-mcp/docker-compose.yml on docker.int by
-# .github/workflows/build-deploy.yml.
-#
-# CI supplies one env file, images.env, containing only the pinned image
-# digest. Runtime secrets are generated or consumed on the mounted /keys
-# volume and never need a deploy-time environment value.
+# Reference slot compose file for lab-owned deployment of vcf-ops-mcp.
+# The lab deployment supplies VCF_OPS_MCP_IMAGE as a pinned version or digest.
+# Runtime secrets are generated or consumed on the mounted /keys volume and
+# never need a deploy-time environment value.
 #
 # TLS is not configured here and must not be. fleet-caddy terminates TLS at the
 # edge for vcf-ops-mcp.int.sentania.net and reaches this container over plain
