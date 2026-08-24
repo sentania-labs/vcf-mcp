@@ -88,17 +88,12 @@ This is a hard rule across the whole repo.
 - Branch prefixes are per-resident: `claude/*`, `codex/*`, `agy/*` (this
   project seats claude-worker, codex-worker, and agy-worker as its three
   doers, per Scott's standard doer-composition ruling; cursor is seated
-  read-only as critic, tiebreaker-only on a 2-2 four-ballot split, see
-  `.team/team-config.yaml`).
+  read-only as critic, tiebreaker-only on a 2-2 four-ballot split).
 - Every commit an agent authors carries a `Co-authored-by:` trailer naming
   the resident that wrote it, so authorship survives squash merges.
 - No self-merge and no self-approval. The resident that wrote a change never
   merges it and never signs off on it as its own reviewer. Merge authority
   belongs to the orchestrator.
-- Before a doer's slice integrates, another resident (not the author) must
-  review the diff in-worktree and write a pre-integration sign-off marker
-  under `.team/signoffs/` (see that directory's README). No marker, no
-  integration.
 - Per the framework's round-branch integration model: doers commit to
   prefixed branches off one round branch, the orchestrator merges reviewed
   doer branches into it locally, and the round branch produces exactly one
@@ -117,8 +112,6 @@ This is a hard rule across the whole repo.
   the team's call. See `roles/orchestrator.md`'s "Escalate" section.
 - CI is fork-gated: PR jobs run only for branches pushed into this repo,
   never for forks.
-- `TEAM-STATE.md` at repo root is the orchestrator's durable state file. It
-  is read-and-updated machinery, not a human changelog.
 
 ## Pinned tooling
 
