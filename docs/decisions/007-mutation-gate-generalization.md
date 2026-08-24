@@ -155,8 +155,8 @@ must split from `report:run`, and that its alert fingerprint was underspecified.
 
 Four contested questions, four ballots each: orchestrator, claude-worker,
 codex-worker, agy-worker. **No question split 2-2, so the critic seat was
-correctly not invoked**, per `.team/team-config.yaml`, which seats cursor as
-tiebreaker-only.
+correctly not invoked**, per `docs/history/team-config.yaml`, which seats
+cursor as tiebreaker-only.
 
 | Question | claude | codex | agy | orchestrator | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -551,9 +551,9 @@ are authoritative and independently checkable:
 
 | Signer | Signature artifact | Commit |
 | --- | --- | --- |
-| claude-worker | `.team/signoffs/claude-worker-r2-records.md` | `a307102` |
-| codex-worker | `.team/signoffs/codex-worker-r2-records.md` | `10c9282` |
-| agy-worker | `.team/signoffs/agy-worker-r2-records.md` | `726daf4` |
+| claude-worker | `docs/history/signoffs/claude-worker-r2-records.md` | `a307102` |
+| codex-worker | `docs/history/signoffs/codex-worker-r2-records.md` | `10c9282` |
+| agy-worker | `docs/history/signoffs/agy-worker-r2-records.md` | `726daf4` |
 
 Each signer confirms in its artifact that its own dissent, where it has one, is
 quoted accurately and was not softened or truncated. All three signed without

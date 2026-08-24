@@ -28,9 +28,11 @@ catches em-dash and en-dash alike:
 That grep currently fails at the repository baseline. Two reviewers found it
 independently during the round-3 slice review. The hits are en-dashes, in the
 strings `4-6 days` and `8-12` as originally written by the critic, and they are
-in exactly two files:
+in exactly two files (paths as of this ruling; the first was later relocated,
+unedited, to `docs/history/votes/r3-critic-skills.md` when the retired
+foundry team's `.team` directory was deleted, see decision record 015):
 
-    .team/votes/r3-critic-skills.md
+    docs/history/votes/r3-critic-skills.md
     docs/proposals/2/ballots/critic-r3-skills-ownership-vote.md
 
 Both files are the same artifact: the cursor critic's tiebreaking vote on skills
@@ -69,21 +71,27 @@ producing em-dashed output, and it does that job undiminished when it does not
 also reach into quotations of parties who are not bound by it. The critic runs
 read-only under a different harness and never agreed to this repo's style rule.
 
-Concretely, the reviewers' check becomes:
+Concretely, the reviewers' check at the time excluded the two directories
+holding recorded votes and ballots, using a pathspec of the form
+`':!docs/proposals/*/ballots/*'` for one and, for the other, the vote's
+directory under the team-tracking directory that has since been deleted
+(decision record 015); today the equivalent exclusion is
+`':!docs/history/votes/'`:
 
     git grep -nP '[\x{2014}\x{2013}]' -- . \
-      ':!docs/proposals/*/ballots/*' ':!.team/votes/'
+      ':!docs/proposals/*/ballots/*' ':!docs/history/votes/'
 
 Note the trailing `*` on the first pathspec rather than a trailing `/`. The
 directory-suffix form `':!docs/proposals/*/ballots/'` silently excludes nothing
-and the grep still fails; this was verified, not assumed. `.team/votes/` is a
-literal prefix and excludes correctly either way.
+and the grep still fails; this was verified, not assumed. A literal directory
+prefix excludes correctly either way.
 
 **The exemption is narrow and covers transcription only.** Two limits, both
 load-bearing:
 
-1. It attaches to the two directories that hold recorded votes and ballots,
-   `docs/proposals/*/ballots/` and `.team/votes/`, and to nothing else. A
+1. It attaches to the two directories that held recorded votes and ballots,
+   `docs/proposals/*/ballots/` and, at the time, the team-tracking
+   directory's `votes/` (now `docs/history/votes/`), and to nothing else. A
    verbatim quotation embedded in a decision record or a review marker is a
    normal case of a resident authoring a document; that resident is bound
    everywhere else in the file, and if it must quote a dash-bearing passage it

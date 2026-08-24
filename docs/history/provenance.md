@@ -1,4 +1,12 @@
-# Provenance ledger
+# Provenance ledger (historical)
+
+**Archived.** This ledger was maintained by the now-retired foundry team;
+the mechanism that produced it no longer runs in this repo (see
+`docs/decisions/015-retire-foundry-operating-model.md`). It is kept here
+because it is the only surviving mapping from the SHAs decision records
+cite to the preserved copies under `docs/artifacts/`. The rest of this file
+describes the mechanism as it existed when it was written; nothing below
+is a live instruction.
 
 Join key between a decision record's SHA citation and the in-tree copy of
 that content after its source round/doer branch is deleted. See

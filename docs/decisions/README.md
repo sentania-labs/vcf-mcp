@@ -151,6 +151,4 @@ The gate is currently **informational**: it runs and reports on every PR but
 does not block the merge. See the comment in `.github/workflows/consensus.yml`
 for why, and for the two changes that switch it to enforcing.
 
-See `.github/protected-paths.txt` for the enumerated paths and
-`.team/signoffs/README.md` for the separate pre-PR peer sign-off marker, which
-is a different mechanism (per-PR review evidence, not per-decision consensus).
+See `.github/protected-paths.txt` for the enumerated paths.

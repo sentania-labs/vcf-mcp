@@ -3,7 +3,6 @@
 - **Status:** accepted | superseded by NNN | escalated to the principal
 - **Date:** YYYY-MM-DD
 - **Assignment:** <the assignment statement this decision came out of>
-- **Orchestrator run:** <what identifies this run, see TEAM-STATE.md>
 - **Lane:** full protocol | fast lane
 - **Workers dispatched:** claude-worker, codex-worker
 

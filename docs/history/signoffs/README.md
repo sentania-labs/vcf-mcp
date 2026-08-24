@@ -1,6 +1,14 @@
-# Pre-integration peer sign-off markers
+# Pre-integration peer sign-off markers (historical)
 
-The first of the review layers: before a doer's slice integrates into the
+**Archived.** These markers were written by the now-retired foundry team
+during rounds 1 through 4; the mechanism that produced them no longer runs
+in this repo (see `docs/decisions/015-retire-foundry-operating-model.md`).
+They are kept here because decision records 001 through 007 cite specific
+markers in this directory as the independently-checkable sign-off evidence
+for those decisions. The rest of this file describes the mechanism as it
+existed when the markers were written; nothing below is a live instruction.
+
+The first of the review layers: before a doer's slice integrated into the
 round branch, a resident that is *not the author* reviews the diff
 in-worktree and writes a marker here. **No marker, no integration.**
 

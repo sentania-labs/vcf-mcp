@@ -236,9 +236,9 @@ artifacts are authoritative and independently checkable:
 
 | Signer | Signature artifact | Commit |
 | --- | --- | --- |
-| claude-worker | `.team/signoffs/claude-worker-round1-records.md` | `4cde29b` |
-| codex-worker | `.team/signoffs/codex-worker-round1-records.md` | `dd9cf51` |
-| agy-worker | `.team/signoffs/agy-worker-round1-records.md` | `9576887` |
+| claude-worker | `docs/history/signoffs/claude-worker-round1-records.md` | `4cde29b` |
+| codex-worker | `docs/history/signoffs/codex-worker-round1-records.md` | `dd9cf51` |
+| agy-worker | `docs/history/signoffs/agy-worker-round1-records.md` | `9576887` |
 
 Each signer confirmed in its artifact that its own dissent, where it has one,
 is quoted accurately and was not softened or truncated.
