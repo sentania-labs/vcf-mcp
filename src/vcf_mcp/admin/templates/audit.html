@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recent audit records</h1>
+<p class="muted">Newest 200 committed rows. Attempts and terminal outcomes remain separate append-only records.</p>
+<p class="muted">Local mode identifies the key owner. Gateway mode identifies the gateway key and correlation supplied on the MCP request, not the downstream agent. Agent attribution requires joining the gateway log.</p>
+<section class="card" style="overflow:auto">
+  <table>
+    <thead><tr><th>Time</th><th>Caller</th><th>Endpoint</th><th>Target</th><th>Tool</th><th>Pack</th><th>Status</th><th>Error</th><th>Latency</th></tr></thead>
+    <tbody>
+    {% for record in records %}
+      <tr>
+        <td>{{ record.timestamp.isoformat() }}</td>
+        <td><code>{{ record.key_id }}</code>{% if record.key_owner %}<br>{{ record.key_owner }}{% endif %}{% if record.authorization_mode %}<br>{{ record.authorization_mode }}{% endif %}{% if record.caller_id %}<br>{{ record.caller_id }}{% endif %}</td>
+        <td>{{ record.endpoint_name or "" }}</td>
+        <td><code>{{ record.target_id }}</code></td>
+        <td>{{ record.tool_name }}</td>
+        <td>{% if record.pack_id %}{{ record.pack_id }}<br><code>{{ record.pack_version }}</code>{% if record.pack_digest %}<br><code>{{ record.pack_digest[:12] }}</code>{% endif %}{% endif %}</td>
+        <td>{{ record.status.value }}</td>
+        <td>{{ record.error_code or "" }}</td>
+        <td>{{ record.latency_ms if record.latency_ms is not none else "" }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No MCP tool calls have been recorded.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

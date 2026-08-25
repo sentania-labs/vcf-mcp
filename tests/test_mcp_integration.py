@@ -9,18 +9,18 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.app import create_app
-from vcf_ops_mcp.audit import SqliteAuditRepository
-from vcf_ops_mcp.backend_packs import load_backend_packs
-from vcf_ops_mcp.contracts import BackendKind, Capability
-from vcf_ops_mcp.declared_backend import DeclaredBackendClient
-from vcf_ops_mcp.mcp_server import build_mcp_surfaces, implemented_scopes
-from vcf_ops_mcp.runtime_repository import RuntimeRepository
-from vcf_ops_mcp.skills import load_catalog
-from vcf_ops_mcp.vcenter import VcenterTargetClient
-from vcf_ops_mcp.vcf.adapters import ADAPTERS_BY_TOOL_NAME
-from vcf_ops_mcp.vcf.client import TargetCredentials, VcfTargetClient
-from vcf_ops_mcp.vcf.outbound import OutboundAllowlist
+from vcf_mcp.app import create_app
+from vcf_mcp.audit import SqliteAuditRepository
+from vcf_mcp.backend_packs import load_backend_packs
+from vcf_mcp.contracts import BackendKind, Capability
+from vcf_mcp.declared_backend import DeclaredBackendClient
+from vcf_mcp.mcp_server import build_mcp_surfaces, implemented_scopes
+from vcf_mcp.runtime_repository import RuntimeRepository
+from vcf_mcp.skills import load_catalog
+from vcf_mcp.vcenter import VcenterTargetClient
+from vcf_mcp.vcf.adapters import ADAPTERS_BY_TOOL_NAME
+from vcf_mcp.vcf.client import TargetCredentials, VcfTargetClient
+from vcf_mcp.vcf.outbound import OutboundAllowlist
 
 
 ROOT = Path(__file__).resolve().parents[1]

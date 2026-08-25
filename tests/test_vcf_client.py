@@ -18,7 +18,7 @@ import unittest
 
 import httpx
 
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.contracts import (
     ConfigurationGeneration,
     HttpMethod,
     InvalidationMode,
@@ -29,15 +29,15 @@ from vcf_ops_mcp.contracts import (
     TargetRecord,
     invalidation_mode_for_change,
 )
-from vcf_ops_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
-from vcf_ops_mcp.vcf.client import (
+from vcf_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
+from vcf_mcp.vcf.client import (
     MAX_REAUTHENTICATIONS_PER_REQUEST,
     TOKEN_REFRESH_SKEW_SECONDS,
     TargetClientRegistry,
     TargetCredentials,
     VcfTargetClient,
 )
-from vcf_ops_mcp.vcf.errors import (
+from vcf_mcp.vcf.errors import (
     AuthenticationError,
     PermissionDeniedError,
     ReauthenticationExhausted,
@@ -47,7 +47,7 @@ from vcf_ops_mcp.vcf.errors import (
     UpstreamStatusError,
     UpstreamTimeoutError,
 )
-from vcf_ops_mcp.vcf.outbound import OutboundAllowlist, ReadContract
+from vcf_mcp.vcf.outbound import OutboundAllowlist, ReadContract
 
 
 PASSWORD = "synthetic-not-a-real-password"

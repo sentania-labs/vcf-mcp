@@ -133,7 +133,7 @@ The secondary arguments are also decisive on their own:
   hand-maintained allowlist anyway. Once you have the allowlist, generation
   has bought you nothing.
 
-**What I would build.** Module layout under `src/vcf_ops_mcp/`:
+**What I would build.** Module layout under `src/vcf_mcp/`:
 
 ```
 server.py          builds the ASGI app, mounts MCP + admin UI on one listener
@@ -441,8 +441,8 @@ Concretely:
   14-day lifetime. Session payload is one boolean, as in files-hosting. No
   user table.
 - **Bootstrap admin credential: an scrypt or Argon2id hash supplied as
-  `VCFOPS_MCP_ADMIN_PASSWORD_HASH`, generated out-of-band by a
-  `python -m vcf_ops_mcp.hashpw` CLI, with the app refusing to boot if it is
+  `VCF_MCP_ADMIN_PASSWORD_HASH`, generated out-of-band by a
+  `python -m vcf_mcp.hashpw` CLI, with the app refusing to boot if it is
   absent or malformed.** This is exactly files-hosting's pattern including
   its hash-shape validation guard, which exists because that hash got
   silently truncated twice by two unrelated mechanisms. I read SPEC 4.3's

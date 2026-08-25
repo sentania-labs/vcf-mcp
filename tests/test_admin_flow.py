@@ -12,11 +12,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.app import create_app
-from vcf_ops_mcp.audit import SqliteAuditRepository
-from vcf_ops_mcp.contracts import BackendKind, InvalidationMode
-from vcf_ops_mcp.mcp_server import implemented_scopes
-from vcf_ops_mcp.runtime_repository import RuntimeRepository
+from vcf_mcp.app import create_app
+from vcf_mcp.audit import SqliteAuditRepository
+from vcf_mcp.contracts import BackendKind, InvalidationMode
+from vcf_mcp.mcp_server import implemented_scopes
+from vcf_mcp.runtime_repository import RuntimeRepository
 
 
 def synthetic_ca_pem() -> str:
@@ -176,7 +176,7 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
             assert csrf is not None
 
             with mock.patch(
-                "vcf_ops_mcp.admin.auth.is_recent_reauth",
+                "vcf_mcp.admin.auth.is_recent_reauth",
                 return_value=False,
             ):
                 bounced = client.post(

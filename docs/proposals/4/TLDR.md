@@ -19,13 +19,13 @@ as a separate slice (Slice B).
   alternative is #4 stays open for days.
 - **Three Actions secrets the workflow reads do not exist.** Only
   `DOCKER_DEPLOY_KEY` is there. We need you to confirm that key is actually
-  the `vcf-ops-mcp` slot's key, and to create `DOCKER_DEPLOY_HOST` and
+  the `vcf-mcp` slot's key, and to create `DOCKER_DEPLOY_HOST` and
   `SERVICE_URL` as repository *variables* (they are lab hostnames, not
   credentials). We will tell you the exact value shape; hearthgate's
   convention and this workflow's convention disagree and one of them will
   silently produce `deploy@deploy@host`.
 - **What can the deploy key actually run?** Our workflow calls
-  `vcf-ops-mcp get-digest` over ssh. That verb appears nowhere outside our own
+  `vcf-mcp get-digest` over ssh. That verb appears nowhere outside our own
   file. hearthgate's key on the same host runs arbitrary `scp` and
   `docker compose`, which is a general shell key, not a forced command. If ours
   is the hearthgate shape, the deploy step needs rewriting around a compose

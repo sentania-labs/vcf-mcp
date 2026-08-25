@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from vcf_ops_mcp.backend_packs import DEFAULT_PACKS_PATH, load_backend_packs
-from vcf_ops_mcp.contracts import BackendKind
+from vcf_mcp.backend_packs import DEFAULT_PACKS_PATH, load_backend_packs
+from vcf_mcp.contracts import BackendKind
 
 
 REMAINING_OFFICIAL = frozenset(
@@ -138,6 +138,17 @@ def test_operator_pack_cannot_compress_below_nineteen_tools(tmp_path: Path) -> N
         load_backend_packs(operator_path=operator_path)
 
 
+def test_every_tool_requires_its_own_response_allowlist(tmp_path: Path) -> None:
+    operator_path = tmp_path / "operator-packs"
+    operator_path.mkdir()
+    document = _operator_pack(BackendKind.IDENTITY_BROKER)
+    del document["tools"][0]["response_keys"]
+    (operator_path / "identity.json").write_text(json.dumps(document))
+
+    with pytest.raises(ValueError, match="its own response projection allowlist"):
+        load_backend_packs(operator_path=operator_path)
+
+
 def test_operator_pack_rejects_unsupported_argument_types_at_load(
     tmp_path: Path,
 ) -> None:
@@ -193,6 +204,7 @@ def _operator_pack(backend: BackendKind) -> dict[str, object]:
                 "method": "GET",
                 "path": f"/fixtures/{index}",
                 "projection": "fixture.v1",
+                "response_keys": ["id", "name", "items", "count"],
             }
             for index in range(19)
         ],

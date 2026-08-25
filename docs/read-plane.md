@@ -1,6 +1,6 @@
 # The VCF read plane
 
-Implementation notes for `src/vcf_ops_mcp/vcf/`, owned by claude-worker per
+Implementation notes for `src/vcf_mcp/vcf/`, owned by claude-worker per
 record 009 decision 6-sub. Authority is
 `docs/decisions/009-phase1-build-synthesis.md` and `docs/proposals/2/SPEC.md`.
 

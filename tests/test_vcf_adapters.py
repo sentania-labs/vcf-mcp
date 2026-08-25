@@ -17,7 +17,7 @@ import unittest
 
 import httpx
 
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.contracts import (
     REQUIRED_REGISTRATION_CORE,
     Capability,
     ConfigurationGeneration,
@@ -27,10 +27,10 @@ from vcf_ops_mcp.contracts import (
     TargetPosture,
     TargetRecord,
 )
-from vcf_ops_mcp.vcf.adapters import READ_ADAPTERS, READ_ALLOWLIST, alerts, inventory
-from vcf_ops_mcp.vcf.adapters import metrics as metrics_adapters
-from vcf_ops_mcp.vcf.adapters import reports as reports_adapters
-from vcf_ops_mcp.vcf.caps import (
+from vcf_mcp.vcf.adapters import READ_ADAPTERS, READ_ALLOWLIST, alerts, inventory
+from vcf_mcp.vcf.adapters import metrics as metrics_adapters
+from vcf_mcp.vcf.adapters import reports as reports_adapters
+from vcf_mcp.vcf.caps import (
     MAX_METRICS_RESOURCES,
     MAX_METRICS_STAT_KEYS,
     MAX_PAGE_SIZE,
@@ -38,9 +38,9 @@ from vcf_ops_mcp.vcf.caps import (
     clamp_page_size,
     samples_in_window,
 )
-from vcf_ops_mcp.vcf.client import TargetCredentials, VcfTargetClient
-from vcf_ops_mcp.vcf.errors import OutboundContractViolation, ResultCapExceeded
-from vcf_ops_mcp.vcf.outbound import OutboundAllowlist, ReadContract, render_path
+from vcf_mcp.vcf.client import TargetCredentials, VcfTargetClient
+from vcf_mcp.vcf.errors import OutboundContractViolation, ResultCapExceeded
+from vcf_mcp.vcf.outbound import OutboundAllowlist, ReadContract, render_path
 
 
 FAR_FUTURE_MS = 4_102_444_800_000

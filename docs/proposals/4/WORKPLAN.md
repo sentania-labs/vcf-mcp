@@ -43,7 +43,7 @@ Blocking. Nothing in Slice A starts until these land.
 
 ## Step 1. Attest the slot contract. Read-only. agy-worker.
 
-Ask lab-admin, without ssh: does the forced command behind the `vcf-ops-mcp`
+Ask lab-admin, without ssh: does the forced command behind the `vcf-mcp`
 slot key accept `get-digest` and a bare image reference, or is it a
 hearthgate-shaped general shell key.
 
@@ -58,7 +58,7 @@ volume layout, and it goes back to the principal before anyone writes YAML.
 The docker.int host pulls hearthgate's private package with no
 workflow-supplied credential, so it holds a daemon-level GHCR credential. Ask
 whether that credential is org-scoped, in which case
-`ghcr.io/sentania-labs/vcf-ops-mcp` is already pullable and there is nothing to
+`ghcr.io/sentania-labs/vcf-mcp` is already pullable and there is nothing to
 do.
 
 *Proves:* that a green push actually yields a pullable image, which is the
@@ -106,7 +106,7 @@ hearthgate notwithstanding, and the round escalates rather than guessing. A
 different `denied:` string gets read literally, not pattern-matched to D1.
 
 Then read the package back: `gh api
-orgs/sentania-labs/packages/container/vcf-ops-mcp` with a token carrying
+orgs/sentania-labs/packages/container/vcf-mcp` with a token carrying
 `read:packages`, checking `visibility` and `repository`. Note that the
 orchestrator's token lacks that scope, so this needs one that has it.
 
@@ -149,7 +149,7 @@ the health gate is doing.
 - The `main` run link and the commit SHA.
 - The image digest, and the package's visibility and repository linkage from
   step 5.
-- `curl -i https://vcf-ops-mcp.int.sentania.net/healthz` output, verbatim,
+- `curl -i https://vcf-mcp.int.sentania.net/healthz` output, verbatim,
   including if it is a 503, with the reason and a pointer to the Slice B issue.
 - The step-1 answer, recorded, because it is the durable fact this repo did not
   previously have written down anywhere.

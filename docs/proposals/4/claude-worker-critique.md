@@ -13,7 +13,7 @@ scope and change nothing.
 Four checks the round asked for, and two I added.
 
 **Repo default workflow permissions.** `gh api
-repos/sentania-labs/vcf-ops-mcp/actions/permissions/workflow` returns
+repos/sentania-labs/vcf-mcp/actions/permissions/workflow` returns
 `{"default_workflow_permissions":"read","can_approve_pull_request_reviews":true}`.
 This settles question 1 against me. See section 3.1.
 
@@ -26,7 +26,7 @@ to this repo: `AWS_*`, `DNS_SERVER`, `DOCKER_HUB_*`, `KRB*`,
 either level. Both peers who claimed this are right.
 
 **`/healthz` cannot return 200.** Confirmed from source. `Dockerfile:38` runs
-`uvicorn vcf_ops_mcp.app:create_app --factory`, uvicorn calls the factory with
+`uvicorn vcf_mcp.app:create_app --factory`, uvicorn calls the factory with
 no arguments, `audit_repository` defaults to `None` (`app.py:54`),
 `app.state.audit_repository` is set to `None` (`app.py:74`), and `healthz`
 takes the `else` branch and returns 503 unconditionally (`app.py:27-34`).
@@ -141,7 +141,7 @@ application defect and this round is scoped to a workflow file, then criterion
 two is not achievable by this round's deliverable and the issue is mis-scoped as
 filed. Codex proposes no scope split, no explicit deferral, and no follow-up
 issue. Its proposal, followed exactly, ends with a green Actions run, a 503 at
-`vcf-ops-mcp.int.sentania.net/healthz`, and a runbook whose step 7 fails with no
+`vcf-mcp.int.sentania.net/healthz`, and a runbook whose step 7 fails with no
 guidance on what to do about it beyond "fails acceptance."
 
 What should happen instead: replace step 3 with two things. A local run whose
@@ -171,7 +171,7 @@ it converts a production defect into a false green.
 The diff does `- secrets.DOCKER_INT_DEPLOY_KEY` / `+ secrets.DOCKER_DEPLOY_KEY`
 today. The prose says the rename "must be confirmed against the slot onboarding
 record before implementation" and that if `DOCKER_DEPLOY_KEY` is not the
-`vcf-ops-mcp` forced-command key, the fix is to provision a correctly named
+`vcf-mcp` forced-command key, the fix is to provision a correctly named
 secret. Both cannot be the recommendation. As written, a reviewer takes the
 diff, the confirmation step gets folded into the general pre-merge gate, and
 the assumption ships.
@@ -224,8 +224,8 @@ then does nothing structural about it.
 
 **A7. Codex's step 5 requires an observation the workflow cannot make.**
 "Require the slot deploy step to pull that digest, not merely accept an SSH
-command." The deploy step runs `ssh ... vcf-ops-mcp
-ghcr.io/sentania-labs/vcf-ops-mcp@${IMAGE_DIGEST}` and captures nothing. There
+command." The deploy step runs `ssh ... vcf-mcp
+ghcr.io/sentania-labs/vcf-mcp@${IMAGE_DIGEST}` and captures nothing. There
 is no output parsing, no post-deploy `get-digest` readback compared against the
 pushed digest, and `/healthz` returns no version or digest field to compare
 against (see `app.py:19-26`, the body is `ready`, `audit_writable`,
@@ -290,7 +290,7 @@ does:
 
 1. `echo "$DEPLOY_KEY" > "$KEY_PATH"` writes a single newline. `$KEY_PATH` is a
    zero-content key file.
-2. `PREV_DIGEST=$(ssh -i "$KEY_PATH" ... deploy@$DEPLOY_HOST vcf-ops-mcp
+2. `PREV_DIGEST=$(ssh -i "$KEY_PATH" ... deploy@$DEPLOY_HOST vcf-mcp
    get-digest || echo "none")`. `$DEPLOY_HOST` is empty, so the ssh target is
    the literal string `deploy@`. This fails, and `|| echo "none"` swallows it.
    The one diagnostic signal available is discarded by design.
@@ -385,7 +385,7 @@ and away from the one nothing answers.** agy would spend its hour on the
 host's GHCR credential. Section 0 answers that from public data in about a
 minute, for free, without asking anyone.
 
-The question nothing in this repo answers is whether `vcf-ops-mcp get-digest`
+The question nothing in this repo answers is whether `vcf-mcp get-digest`
 is a command the slot can run. `grep -rn 'get-digest' docs/ .team/` finds that
 string nowhere outside this repo's own workflow. The only description of the
 interface is `docs/proposals/2/SPEC.md:488`, "the onboarded slot's
@@ -396,7 +396,7 @@ general-purpose shell key, not a forced command with a per-project subcommand
 grammar.
 
 If docker.int onboarded this project the way it onboarded hearthgate, then
-`vcf-ops-mcp get-digest` and `vcf-ops-mcp <image-ref>` are not things the key
+`vcf-mcp get-digest` and `vcf-mcp <image-ref>` are not things the key
 can run, and both ssh invocations in the deploy step are written against an
 interface that does not exist. That is not a line to fix, it is the whole step.
 agy's actual digest risk ("standard Docker/Containerd tools natively accept
@@ -668,8 +668,8 @@ numbered decision. That is my correction to make, not a peer's.
    with the value shape specified (whether the host carries the `deploy@`
    prefix). Values never enter the repo or transcripts.
 3. Confirm with lab-admin, read-only, what the forced command behind
-   `DOCKER_DEPLOY_KEY` accepts. Specifically whether `vcf-ops-mcp get-digest`
-   and `vcf-ops-mcp <image-ref>` are real, or whether this slot is a
+   `DOCKER_DEPLOY_KEY` accepts. Specifically whether `vcf-mcp get-digest`
+   and `vcf-mcp <image-ref>` are real, or whether this slot is a
    hearthgate-shaped general shell key expecting a compose file. If it is the
    latter, Slice A grows a compose file and a slot volume layout and becomes a
    round of its own.

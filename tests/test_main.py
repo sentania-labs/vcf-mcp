@@ -22,16 +22,16 @@ from unittest import mock
 
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.app import create_app
-from vcf_ops_mcp.audit import AuditStorageUnavailable, SqliteAuditRepository
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.app import create_app
+from vcf_mcp.audit import AuditStorageUnavailable, SqliteAuditRepository
+from vcf_mcp.contracts import (
     AuditRecord,
     AuditStatus,
     CorrelationId,
     KeyId,
     TargetId,
 )
-from vcf_ops_mcp.main import create_production_app
+from vcf_mcp.main import create_production_app
 
 SECRET_ENVIRONMENT = {
     "SESSION_SECRET": "synthetic-test-secret-with-more-than-32-bytes"
@@ -218,7 +218,7 @@ class ProductionAppTests(unittest.TestCase):
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "vcf_ops_mcp.main:create_production_app",
+                "vcf_mcp.main:create_production_app",
                 "--factory",
                 "--host",
                 "127.0.0.1",

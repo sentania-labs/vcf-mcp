@@ -5,13 +5,13 @@
 I performed read-only recon against the repository and source before judging
 either proposal:
 
-- `repos/sentania-labs/vcf-ops-mcp/actions/permissions/workflow` reports
+- `repos/sentania-labs/vcf-mcp/actions/permissions/workflow` reports
   `default_workflow_permissions: read`.
 - Repository Actions secret metadata contains only `DOCKER_DEPLOY_KEY`.
   Organization secret metadata contains none of `DOCKER_INT_DEPLOY_KEY`,
   `DEPLOY_HOST`, `SERVICE_URL`, or `DOCKER_DEPLOY_KEY`.
 - The workflow reads `DOCKER_INT_DEPLOY_KEY`, `DEPLOY_HOST`, and `SERVICE_URL`.
-- `Dockerfile` invokes `uvicorn vcf_ops_mcp.app:create_app --factory`, so the
+- `Dockerfile` invokes `uvicorn vcf_mcp.app:create_app --factory`, so the
   factory receives no audit repository argument.
 - `create_app` raises when `SESSION_SECRET` is absent. No workflow or
   repository deployment artifact supplies it.
@@ -89,7 +89,7 @@ as unverified.
 The costly part is that its workplan says Scott or the orchestrator creates
 `DEPLOY_HOST` and `SERVICE_URL`, while treating `DOCKER_DEPLOY_KEY` as the
 likely selected key. Secret-name similarity and the Hearthgate precedent do
-not prove that this value is the forced-command key for the `vcf-ops-mcp`
+not prove that this value is the forced-command key for the `vcf-mcp`
 slot. A preflight only proves non-emptiness, not identity or command
 authorization.
 
@@ -192,7 +192,7 @@ and service URL configuration, and add a loud non-secret preflight before SSH.
 ### Attack 2: the proposal assumes an unverified forced-command contract
 
 Agy says standard container tools accept digest references, but that does not
-answer whether the remote `vcf-ops-mcp` wrapper accepts either
+answer whether the remote `vcf-mcp` wrapper accepts either
 `get-digest` or an image reference. The wrapper is not in this repository and
 the proposal supplies no read-only evidence of its grammar. Owning the slot
 model is not evidence that the deployed host matches it.

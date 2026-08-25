@@ -1,130 +1,113 @@
-# Multi-backend prototype delivery note
+# Full governance delivery note
 
-This document is the proposed pull request body and the operator verification
-packet for the VCF MCP prototype. It deliberately distinguishes fixture proof
+This document is the proposed pull request body and operator verification
+packet for the VCF MCP governance delivery. It distinguishes fixture proof
 from proof that requires Scott's lab.
 
 ## Summary
 
-This change replaces the single `/mcp` VCF Operations surface with startup
-composition for one management endpoint and a separate endpoint for every
-built-in product:
+This change completes four governance areas and applies the captain's live
+project rename:
 
-- `/ops/mcp` exposes the 19 existing typed Operations read tools when an
-  Operations target was registered before process start.
-- `/vcenter/mcp` exposes 19 typed vCenter inventory reads when a vCenter target
-  was registered before process start.
-- `/nsx/mcp`, `/sddc-manager/mcp`, `/ops-networks/mcp`, `/fleet-lcm/mcp`,
-  `/sddc-lcm/mcp`, `/log-management/mcp`, and `/vsan-dp/mcp` each expose 19
-  typed read tools when their matching target was registered before process
-  start.
-- `/vcf/mcp` exposes only management, health, history, and skills reads.
+- local and gateway authorization modes, with transactional revocation of
+  every active key whenever the mode changes
+- signed operator-pack installation with exact GitHub workflow identity and
+  issuer pinning, offline Sigstore verification, staged confirmation, retention,
+  and rollback
+- response allowlisting owned by every tool, a persistent failed-auth lockout,
+  and per-backend concurrency plus bounded 429 backoff
+- online resumable credential-key rotation, startup row-integrity quarantine,
+  unambiguous length-prefixed associated data, and separate database and
+  keyring backup handling
+- the live package, imports, image, deployment configuration, instructions,
+  and product prose renamed to `vcf_mcp` or `vcf-mcp`
 
-Every product is carried by a separate unsigned, data-only backend pack. The
-packs declare their product, tool schemas, paths, HTTP methods,
-allowed query and body keys, projections, caps, and auth scheme. Tool handlers
-are still static code, and a tool is published only after it is registered with
-the mandatory dispatcher.
+The historical records under `docs/decisions`, `docs/artifacts`, and
+`docs/history` retain the former project name exactly as written. Rewriting
+those records would falsify their contemporary context. The pull request body
+reports 123 changed files and 52 historical files containing the former name
+that were deliberately left unchanged.
 
-The admin UI supports target registration and editing for every built-in product.
-An operator can change an existing target's name, FQDN, credentials, posture,
-root CA, and TLS verification policy. Credential rotation and root CA storage
-use the existing AES-256-GCM keyring path. The unsigned prototype refuses every
-attempt to enable actions.
+Product endpoints remain frozen for a process lifetime. Signed pack installs
+and rollbacks take effect after restart. Startup verifies the active operator
+pack before its bytes reach the loader, and the loader requires an explicit
+response allowlist on every tool.
 
-New targets default to TLS verification disabled, and the UI labels that risk
-plainly. Trust is configured per target. Enabling verification cancels in-flight
-requests on that target, as do root CA replacements and removal. It never
-changes process-wide trust and never drains work that began under the replaced
-trust.
+## Fixture and artifact evidence
 
-API keys are scoped to endpoints, capabilities, and targets. Audit records now
-carry endpoint name plus backend pack ID, SHA-256 digest, and version. Management
-history is scoped to both key and caller identity, with no key-only fallback.
+The local tests and built container prove:
 
-## Fixture evidence
-
-The normal test suite performs no lab network calls. Its synthetic appliance
-fixtures prove:
-
-- one key calls a typed Operations tool on `/ops/mcp` and a typed vCenter tool
-  on `/vcenter/mcp`, receiving projected product data from each
-- Operations uses OpsToken authentication and vCenter uses Basic session
-  creation followed by `vmware-api-session-id`
-- a vCenter target sent to the Operations endpoint is denied and audited
-- a missing backend contributes no product endpoint or tools at startup
-- key revocation rejects the next request
-- caller history returns nothing without `X-VCF-Caller-ID`
-- target edits rotate credentials through the encrypted store
-- CA plaintext, old credentials, and new credentials do not appear in SQLite
-- enabling TLS verification selects request cancellation, not draining
-- vCenter performs one bounded reauthentication on 401 and none on 403
-- response projections discard undeclared upstream fields
-- all nine built-in product packs publish exactly 19 distinct typed tools,
-  without compressing or collapsing list and get operations
-- Basic auth, SDDC token acquisition, Ops bearer acquisition, Ops token
-  exchange, static bearer, and vCenter session auth are fixture-proven
-- an operator-supplied 19-tool pack loads alongside the official set and cannot
-  replace an official product pack
+- local mode supports separately scoped keys and empty scope denies all tools
+- gateway mode has one broad key per endpoint registration
+- changing authorization mode revokes every active key in one transaction
+- audit records identify mode and configured key owner
+- cosign receives the exact workflow identity, GitHub issuer, bundle, trusted
+  root, offline flag, and pack bytes
+- a signature, digest, identity, or issuer mismatch is refused and audited
+- unsigned install is off by default, remains visibly flagged when enabled,
+  and cannot coexist with action-enabled targets
+- every declared tool owns its own response-field allowlist, including tools
+  that return secret-like objects
+- three consecutive authentication failures persistently lock one target until
+  an operator clears it
+- backend concurrency is bounded and repeated 429 responses use bounded,
+  exponential backoff with a first-activation warning
+- credential rotation resumes from durable progress after interruption and
+  retires unused old keys only after completion
+- startup quarantines a damaged row while preserving healthy targets, then
+  refuses readiness when every configured target fails integrity verification
+- a database backup excludes the keyring and restores successfully only when
+  paired with the separately retained keyring artifact
+- the renamed container builds and its real `/healthz` endpoint reports ready
+  while running read-only as the non-root application user
 
 Run the proof with:
 
 ```sh
 .venv/bin/pytest tests/
+ruff check src tests
 ./tools/generate_agents_md.sh --check
 ./tools/consensus-check.py --self-test
+docker build -t vcf-mcp:local .
 ```
-
-## Phase plan and gates
-
-This prototype is one delivery phase aimed at Gate 1. Local fixture proof and
-packaging complete before the pull request opens. After deployment, Scott runs
-the lab packet below. Gate 2 action work remains excluded because unsigned packs
-cannot arm a target. Gate 3 remains a later production read-only registration.
 
 ## Operator verification still required
 
 The following cannot be proven from this worktree because it cannot reach the
-lab, and no lab credentials were requested:
+captain's appliances and no lab credentials were requested:
 
-1. Register each available devel appliance in the admin UI, then restart the
-   container to freeze its product endpoint.
-2. Upload the appropriate CA bundle for each, enable verification, and confirm
-   one typed call returns real data from every registered product endpoint.
-3. Confirm the bearer source for Fleet Lifecycle and SDDC Lifecycle, the
-   Operations for Networks bearer flow, the Log Management exchange flow, and
-   the exact SDDC Manager and vSAN session response shapes.
-4. Call one tool from every implemented product, then confirm each attempt and
-   terminal row identifies its endpoint and pack.
-5. Revoke the key and confirm its next request is rejected.
-6. Restart the container and confirm target credential decryption and audit
-   continuity.
-7. Restore the runtime database with the separately held keyring and confirm
-   the same continuity.
-8. Exercise the Streamable HTTP endpoints through the lab reverse proxy to
-   check buffering, idle timeout, header forwarding, and reconnect behavior.
+### Authorization modes
 
-Until that packet is complete, compatibility with the real appliance versions,
-base paths, authentication exchanges, lab CA chain, live permissions, response
-shapes, reverse proxy, restart, and restore behavior remains unproven. The
-worktree had no route to the captain's appliances, and no lab credentials were
-requested or used.
+- gateway reachability isolation, mutual TLS, and gateway-provided caller
+  attribution outside the application boundary
+- key revocation behavior through the deployed reverse proxy after a live mode
+  change
 
-## Deliberately deferred
+### Pack trust
 
-This prototype must not be read as the completed product. The following are
-plainly deferred production hardening:
+- a real release bundle from the pinned workflow verifying offline with the
+  trusted root shipped in the production image
+- signed feed install, restart activation, and rollback on the deployed volumes
 
-- cosign pack signing, certificate identity pinning, the pack trust root, and
-  trust-root refresh
-- backend pack feed installation and rollback
-- gateway mode and the authorization-mode toggle
-- failed-auth circuit breaker
-- upstream rate limiting and backoff
-- response redaction
-- token-budget warnings and install refusal
+### Response safety, authentication lockout, and rate limiting
 
-The backend definitions in this prototype load unsigned from disk. Unsigned is
-the only supported prototype mode, and every action-enabled target is refused.
-Certificate fingerprint pinning remains rejected. Uploaded CA bundles are the
-TLS trust mechanism.
+- response allowlists against the complete response shapes of every lab product
+- lockout behavior against the DEVEL appliance and its backing identity source
+- real 429 timing and safe concurrency values for each appliance generation
+
+### Store contract
+
+- interrupted rotation and resume across a real container replacement
+- startup quarantine using a deliberately damaged copied database
+- separate database and keyring artifact restore across the deployed volumes
+
+### Existing appliance integration
+
+- compatibility with the real product versions, endpoint base paths,
+  permissions, authentication exchanges, and CA chain
+- Streamable HTTP behavior through the lab reverse proxy, including buffering,
+  idle timeout, header forwarding, and reconnect behavior
+
+Until this packet is complete, those operational claims remain unproven. The
+production appliance remains read-only, and any live action testing still
+requires the existing Phase 2 approval.

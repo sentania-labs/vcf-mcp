@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.contracts import (
     TEST_ONLY_MUTATING_CAPABILITY,
     Capability,
     ConfigurationGeneration,
@@ -15,13 +15,13 @@ from vcf_ops_mcp.contracts import (
     TargetRecord,
     TerminalState,
 )
-from vcf_ops_mcp.dispatcher import (
+from vcf_mcp.dispatcher import (
     DispatchDependencies,
     DispatchError,
     Dispatcher,
     ToolRegistry,
 )
-from vcf_ops_mcp.dispatcher.reservations import (
+from vcf_mcp.dispatcher.reservations import (
     CALL_RESERVATION_BYTES,
     CHECKPOINT_HEADROOM_BYTES,
     FreeSpaceReservations,

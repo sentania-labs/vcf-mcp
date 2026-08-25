@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import pytest
-from vcf_ops_mcp.skills import (
+from vcf_mcp.skills import (
     load_catalog,
     check_index_exact_regeneration,
     SkillLoadError,
@@ -243,7 +243,7 @@ def test_check_index_exact_regeneration_tampered(tmp_path: Path):
     (skill_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
 
     # generate a valid index.json
-    from vcf_ops_mcp.skills import build_index_data
+    from vcf_mcp.skills import build_index_data
     index_data = build_index_data(skills_dir)
     (skills_dir / "index.json").write_text(json.dumps(index_data), encoding="utf-8")
 
@@ -293,7 +293,7 @@ def test_build_index_data_is_sorted(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(Path, "iterdir", mock_iterdir)
 
-    from vcf_ops_mcp.skills import build_index_data
+    from vcf_mcp.skills import build_index_data
     index_data = build_index_data(skills_dir)
 
     # Should be sorted by slug

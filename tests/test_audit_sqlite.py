@@ -15,15 +15,15 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from vcf_ops_mcp.audit import (
+from vcf_mcp.audit import (
     RECOVERY_ERROR_CODE,
     SCHEMA_VERSION,
     AuditStorageUnavailable,
     SqliteAuditRepository,
     audit_db_path_from_environment,
 )
-from vcf_ops_mcp.audit.sqlite_repository import DEFAULT_AUDIT_DB_PATH
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.audit.sqlite_repository import DEFAULT_AUDIT_DB_PATH
+from vcf_mcp.contracts import (
     AuditRecord,
     AuditStatus,
     CorrelationId,
@@ -123,6 +123,25 @@ class SqliteAuditRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.status, AuditStatus.ATTEMPT)
         self.assertEqual(stored.timestamp, AT)
         self.assertEqual(stored.projection_version, "v1")
+
+    async def test_authorization_mode_and_key_owner_round_trip(self) -> None:
+        self.repo.open()
+        value = record("mode-owner", AuditStatus.OK)
+        value = AuditRecord(
+            **{
+                field: getattr(value, field)
+                for field in value.__dataclass_fields__
+                if field not in {"authorization_mode", "key_owner"}
+            },
+            authorization_mode="gateway",
+            key_owner="gateway-ops",
+        )
+        await self.repo.append_committed(value)
+
+        stored = (await self.repo.recent_records(limit=1))[0]
+        self.assertEqual(stored.authorization_mode, "gateway")
+        self.assertEqual(stored.key_owner, "gateway-ops")
+        self.assertEqual(stored.status, AuditStatus.OK)
 
     async def test_optional_fields_survive_a_round_trip(self) -> None:
         self.repo.open()

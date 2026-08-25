@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from vcf_ops_mcp.vcf.fixtures import generator
-from vcf_ops_mcp.vcf.fixtures.generator import (
+from vcf_mcp.vcf.fixtures import generator
+from vcf_mcp.vcf.fixtures.generator import (
     TIMESTAMP_BASE_MS,
     Rule,
     UnknownSchemaPath,
@@ -21,7 +21,7 @@ from vcf_ops_mcp.vcf.fixtures.generator import (
     lab_markers_in,
     raw_tokens_in_output,
 )
-from vcf_ops_mcp.vcf.fixtures.schemas import (
+from vcf_mcp.vcf.fixtures.schemas import (
     ALERT_COLLECTION_SCHEMA,
     RESOURCE_COLLECTION_SCHEMA,
     STATS_SCHEMA,

@@ -2,7 +2,7 @@ import pytest
 import os
 from unittest import mock
 from starlette.testclient import TestClient
-from vcf_ops_mcp.app import create_app
+from vcf_mcp.app import create_app
 
 class MockAuditRepository:
     def __init__(self, is_writable: bool, unreconciled_count: int):

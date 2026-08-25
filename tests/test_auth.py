@@ -3,7 +3,7 @@ import time
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from vcf_ops_mcp.admin import auth
+from vcf_mcp.admin import auth
 
 
 def test_password_hashing():
