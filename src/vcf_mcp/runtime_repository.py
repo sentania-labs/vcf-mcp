@@ -361,6 +361,12 @@ class RuntimeRepository:
     async def set_unsigned_packs_allowed(self, allowed: bool) -> None:
         await asyncio.to_thread(self._set_unsigned_packs_allowed_sync, allowed)
 
+    async def restart_required(self) -> bool:
+        return await asyncio.to_thread(self._restart_required_sync)
+
+    def set_restart_required_at_startup(self, required: bool) -> None:
+        self._set_restart_required_sync(required)
+
     async def has_actions_enabled_target(self) -> bool:
         return await asyncio.to_thread(self._has_actions_enabled_target_sync)
 
@@ -877,6 +883,11 @@ class RuntimeRepository:
                         root_ca_envelope,
                     ),
                 )
+                connection.execute(
+                    "INSERT INTO settings(name, value) VALUES"
+                    " ('restart_required', '1')"
+                    " ON CONFLICT(name) DO UPDATE SET value = excluded.value"
+                )
                 connection.commit()
             except sqlite3.IntegrityError as exc:
                 raise ValueError("a target with this FQDN already exists") from exc
@@ -1185,6 +1196,27 @@ class RuntimeRepository:
                 connection,
                 "unsigned_pack_policy_changed",
                 {"allowed": allowed},
+            )
+            connection.commit()
+
+    def _restart_required_sync(self) -> bool:
+        with self._lock:
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings WHERE name = 'restart_required'"
+                )
+                .fetchone()
+            )
+            return bool(row and row[0] == "1")
+
+    def _set_restart_required_sync(self, required: bool) -> None:
+        with self._write_transaction() as connection:
+            connection.execute(
+                "INSERT INTO settings(name, value) VALUES"
+                " ('restart_required', ?)"
+                " ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                ("1" if required else "0",),
             )
             connection.commit()
 

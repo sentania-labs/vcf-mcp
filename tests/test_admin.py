@@ -118,3 +118,38 @@ def test_security_write_requires_recent_reauth():
         resp = client.post("/admin/targets", data={"csrf_token": "dummy"}, follow_redirects=False)
         assert resp.status_code == 303
         assert "/admin/reauth" in resp.headers["location"]
+
+
+def test_restart_requires_authentication_recent_reauth_and_csrf(logged_in_client):
+    unauthenticated = TestClient(create_admin_app())
+    response = unauthenticated.post("/admin/restart", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+
+    response = logged_in_client.post(
+        "/admin/restart",
+        data={"csrf_token": "wrong"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+
+    with mock.patch("vcf_mcp.admin.auth.is_recent_reauth", return_value=False):
+        response = logged_in_client.post(
+            "/admin/restart",
+            data={"csrf_token": "wrong"},
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/reauth"
+
+
+def test_restart_fails_closed_when_audit_is_degraded():
+    client = TestClient(create_admin_app(audit_writable=False))
+    client.get("/admin/test-setup-session")
+    response = client.post(
+        "/admin/restart",
+        data={"csrf_token": "irrelevant"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 503
+    assert b"Audit is degraded" in response.content

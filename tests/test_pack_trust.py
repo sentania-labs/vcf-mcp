@@ -10,10 +10,18 @@ import pytest
 from vcf_mcp.backend_packs import DEFAULT_PACKS_PATH, load_backend_packs
 from vcf_mcp.contracts import BackendKind, Capability, TargetPosture
 from vcf_mcp.pack_trust import (
+    MAX_PACK_BYTES,
+    OCI_MANIFEST_MEDIA_TYPE,
+    PACK_ARTIFACT_TYPE,
     PACK_CERTIFICATE_IDENTITY,
     PACK_CERTIFICATE_ISSUER,
+    PACK_LAYER_MEDIA_TYPE,
+    PACK_REGISTRY_REFERENCE,
     PackTrustError,
     PackTrustManager,
+    _read_registry_bytes,
+    _sha256_digest,
+    _version_sort_key,
 )
 from vcf_mcp.runtime_repository import RuntimeRepository
 
@@ -61,6 +69,56 @@ def _manager(
         cosign_path=cosign,
         temp_path=tmp_path / "temp",
     )
+
+
+def _write_oci_layout(layout: Path, pack_bytes: bytes) -> str:
+    pack_digest = _sha256_digest(pack_bytes)
+    manifest_bytes = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+            "artifactType": PACK_ARTIFACT_TYPE,
+            "config": {
+                "mediaType": "application/vnd.oci.empty.v1+json",
+                "digest": "sha256:" + "0" * 64,
+                "size": 2,
+            },
+            "layers": [
+                {
+                    "mediaType": PACK_LAYER_MEDIA_TYPE,
+                    "digest": pack_digest,
+                    "size": len(pack_bytes),
+                }
+            ],
+        },
+        separators=(",", ":"),
+    ).encode()
+    manifest_digest = _sha256_digest(manifest_bytes)
+    blobs = layout / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    (layout / "oci-layout").write_text(
+        '{"imageLayoutVersion":"1.0.0"}\n'
+    )
+    (layout / "index.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+                        "artifactType": PACK_ARTIFACT_TYPE,
+                        "digest": manifest_digest,
+                        "size": len(manifest_bytes),
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
+    (blobs / pack_digest.removeprefix("sha256:")).write_bytes(pack_bytes)
+    (blobs / manifest_digest.removeprefix("sha256:")).write_bytes(manifest_bytes)
+    return manifest_digest
 
 
 @pytest.mark.asyncio
@@ -222,3 +280,215 @@ async def test_previous_pack_version_is_retained_and_rollback_is_one_action(
     assert {entry["version"] for entry in manager.retained_versions()} == {"1.0.0"}
     result = await manager.rollback(BackendKind.OPS, "1.0.0")
     assert result.version == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
+    repository: RuntimeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cosign, arguments_path = _fake_cosign(tmp_path, monkeypatch)
+    manager = _manager(repository, tmp_path, cosign)
+    pack_bytes = (DEFAULT_PACKS_PATH / "ops-networks.json").read_bytes()
+    pack = manager._load_bytes(pack_bytes)
+    manifest_bytes = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+            "artifactType": PACK_ARTIFACT_TYPE,
+            "layers": [
+                {
+                    "mediaType": PACK_LAYER_MEDIA_TYPE,
+                    "digest": _sha256_digest(pack_bytes),
+                    "size": len(pack_bytes),
+                }
+            ],
+        },
+        separators=(",", ":"),
+    ).encode()
+    manifest_digest = _sha256_digest(manifest_bytes)
+    tag = f"pack-{pack.backend.value}-{pack.version}"
+
+    redirected_headers: httpx.Headers | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal redirected_headers
+        url = str(request.url)
+        if url.startswith("https://ghcr.io/token"):
+            return httpx.Response(200, json={"token": "anonymous"})
+        if "/tags/list" in url:
+            if "last=" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "tags": [
+                            tag,
+                            f"pack-{pack.backend.value}-0.0.1",
+                            "pack-ops-9.9.9",
+                            "v0.2.0",
+                        ]
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"tags": ["pack-proof-ignored"]},
+                headers={
+                    "Link": (
+                        "</v2/sentania-labs/vcf-mcp/tags/list"
+                        '?last=pack-proof-ignored&n=1000>; rel="next"'
+                    )
+                },
+            )
+        if "/manifests/" in url:
+            if "pack-ops-9.9.9" in url:
+                return httpx.Response(404)
+            return httpx.Response(
+                200,
+                content=manifest_bytes,
+                headers={"Docker-Content-Digest": manifest_digest},
+            )
+        if request.url.host == "ghcr.io" and "/blobs/" in url:
+            return httpx.Response(
+                307,
+                headers={"Location": "https://objects.example/pack.json"},
+            )
+        redirected_headers = request.headers
+        return httpx.Response(200, content=pack_bytes)
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def fixture_client(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", fixture_client)
+
+    catalog = await manager.registry_catalog()
+    entries = catalog.entries
+
+    assert len(entries) == 1
+    assert len(catalog.skipped) == 1
+    assert catalog.skipped[0]["tag"] == "pack-ops-9.9.9"
+    assert catalog.skipped[0]["backend"] == "ops"
+    assert "404" in catalog.skipped[0]["reason"]
+    assert entries[0]["id"] == f"{pack.backend.value}:{pack.version}"
+    assert entries[0]["manifest_digest"] == manifest_digest
+    assert entries[0]["tool_count"] == len(pack.tools)
+    assert entries[0]["blob_redirects"] == 1
+    assert redirected_headers is not None
+    assert "Authorization" not in redirected_headers
+    arguments = arguments_path.read_text().splitlines()
+    assert arguments[0] == "verify"
+    assert arguments[arguments.index("--certificate-identity") + 1] == (
+        PACK_CERTIFICATE_IDENTITY
+    )
+    assert arguments[-1] == (
+        f"{PACK_REGISTRY_REFERENCE}:{tag}@{manifest_digest}"
+    )
+
+
+def test_registry_newest_version_selection_orders_numerically() -> None:
+    assert _version_sort_key("1.10.0") > _version_sort_key("1.2.0")
+    assert _version_sort_key("2.0.0") > _version_sort_key("1.99.9")
+
+
+@pytest.mark.asyncio
+async def test_registry_redirect_refuses_downgrade_before_request() -> None:
+    visited: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        visited.append(str(request.url))
+        return httpx.Response(
+            307,
+            headers={"Location": "http://objects.example/pack.json"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(PackTrustError, match="non-HTTPS"):
+            await _read_registry_bytes(
+                client,
+                "https://ghcr.io/v2/example/blobs/sha256:fixture",
+                max_bytes=MAX_PACK_BYTES,
+                description="registry pack",
+            )
+
+    assert visited == ["https://ghcr.io/v2/example/blobs/sha256:fixture"]
+
+
+@pytest.mark.asyncio
+async def test_registry_read_limits_actual_redirected_bytes() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"oversized")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(PackTrustError, match="exceeds the size limit"):
+            await _read_registry_bytes(
+                client,
+                "https://objects.example/pack.json",
+                max_bytes=4,
+                description="registry pack",
+            )
+
+
+@pytest.mark.asyncio
+async def test_registry_pack_keeps_offline_startup_verification_and_rollback(
+    repository: RuntimeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cosign, arguments_path = _fake_cosign(tmp_path, monkeypatch)
+    manager = _manager(repository, tmp_path, cosign)
+    original = json.loads((DEFAULT_PACKS_PATH / "ops.json").read_text())
+    first = {**original, "version": "registry-1"}
+    second = {**original, "version": "registry-2"}
+
+    async def install(document: dict[str, object]):
+        pack_bytes = json.dumps(document).encode()
+        fixture = tmp_path / f"fixture-{document['version']}"
+        manifest_digest = _write_oci_layout(fixture, pack_bytes)
+        pack = manager._load_bytes(pack_bytes)
+
+        async def entry_for_tag(backend, version):
+            return {
+                "reference": (
+                    f"{PACK_REGISTRY_REFERENCE}:"
+                    f"pack-{backend.value}-{version}"
+                ),
+                "manifest_digest": manifest_digest,
+            }
+
+        def save(_reference: str, destination: Path) -> None:
+            _write_oci_layout(destination, pack_bytes)
+
+        monkeypatch.setattr(manager, "_registry_entry_for_tag", entry_for_tag)
+        monkeypatch.setattr(manager, "_save_oci_reference", save)
+        staged = await manager.install_from_registry(
+            f"{pack.backend.value}:{pack.version}"
+        )
+        await manager.install_staged(staged.backend, staged.digest)
+        return staged
+
+    staged_first = await install(first)
+    staged_second = await install(second)
+
+    assert manager.active_path.joinpath("ops.oci.tar").is_file()
+    assert not manager.active_path.joinpath("ops.sigstore.json").exists()
+    assert await repository.restart_required() is True
+    assert manager.verify_active_at_startup()[BackendKind.OPS] == staged_second.digest
+    arguments = arguments_path.read_text().splitlines()
+    assert arguments[0] == "verify"
+    assert "--local-image" in arguments
+    assert arguments[arguments.index("--certificate-identity") + 1] == (
+        PACK_CERTIFICATE_IDENTITY
+    )
+
+    rolled_back = await manager.rollback(BackendKind.OPS, "registry-1")
+    assert rolled_back.digest == staged_first.digest
+    assert manager.verify_active_at_startup()[BackendKind.OPS] == staged_first.digest
+
+    manager.active_path.joinpath("ops.json").write_bytes(
+        manager.active_path.joinpath("ops.json").read_bytes() + b"\n"
+    )
+    with pytest.raises(PackTrustError, match="does not match"):
+        manager.verify_active_at_startup()

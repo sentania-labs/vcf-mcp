@@ -21,6 +21,13 @@
     <div><code>/{{ pack.endpoint }}/mcp</code><br><span class="badge {{ 'good' if pack.endpoint in wired_endpoints else '' }}">{{ 'wired' if pack.endpoint in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', pack.backend.value)|list else 'not registered' }}</span></div>
     {% endfor %}
   </div>
+  {% if restart_required %}
+  <p class="warning">A configuration or backend-pack change is waiting for a process restart. New connections will pause, active requests get a short grace period, and all console and MCP sessions will disconnect. The appliance returns automatically only when this container has a restart policy or runs under Compose or Kubernetes. Without one, it stays stopped until an operator starts it.</p>
+  <form method="post" action="/admin/restart">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="danger" type="submit">Restart appliance now</button>
+  </form>
+  {% endif %}
 </section>
 
 <section class="card" style="margin-top:1rem">
@@ -228,7 +235,7 @@
 
 <section class="card" style="margin-top:1rem">
   <h2>Backend pack trust</h2>
-  <p class="muted">A signed pack and its Sigstore bundle can be uploaded while disconnected. Verification pins the release workflow identity and GitHub issuer. Installation is staged for activation on restart, and the prior version is retained.</p>
+  <p class="muted">Signed updates are discovered from the public GHCR package and verified as immutable OCI artifacts. A signed pack and its Sigstore bundle can still be uploaded while disconnected. Both paths pin the release workflow identity and GitHub issuer. Installation is staged for activation on restart, and the prior version is retained.</p>
   {% if unsigned_packs_allowed %}
   <p class="warning">Unsigned pack installation is enabled persistently. It is refused whenever any target permits actions.</p>
   {% endif %}
@@ -243,20 +250,36 @@
     <input id="bundle" name="bundle" type="file" accept=".json,application/json">
     <button type="submit">Verify and stage pack</button>
   </form>
-  <form method="post" action="/admin/packs/feed/check">
+  <form method="post" action="/admin/packs/registry/check">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit">Check pinned pack feed</button>
+    <button type="submit">Check signed pack registry</button>
   </form>
-  {% if pack_feed_entries %}
+  <p class="muted">The registry check inspects and lists only the newest published version per product. Older signed versions stay installable through the exact-version form below.</p>
+  {% for skipped in pack_registry_skipped %}
+  <p class="warning">Registry tag {{ skipped.tag }} for {{ backend_products.get(skipped.backend, skipped.backend) }} could not be listed: {{ skipped.reason }}</p>
+  {% endfor %}
+  {% if pack_registry_entries %}
   <table>
     <thead><tr><th>Backend</th><th>Installed</th><th>Available</th><th>Tool count</th><th>Estimated tokens</th><th></th></tr></thead>
     <tbody>
-    {% for entry in pack_feed_entries %}
-    <tr><td>{{ entry.backend }}</td><td>{{ installed_pack_versions.get(entry.backend, "not installed") }}</td><td>{{ entry.version }}</td><td>{{ entry.tool_count }}</td><td>{{ entry.estimated_definition_tokens }}</td><td><form class="inline" method="post" action="/admin/packs/feed/install"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entry_id" value="{{ entry.id }}"><button type="submit">Verify and stage</button></form></td></tr>
+    {% for entry in pack_registry_entries %}
+    <tr><td>{{ entry.backend }}</td><td>{{ installed_pack_versions.get(entry.backend, "not installed") }}</td><td>{{ entry.version }}</td><td>{{ entry.tool_count }}</td><td>{{ entry.estimated_definition_tokens }}</td><td><form class="inline" method="post" action="/admin/packs/registry/install"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entry_id" value="{{ entry.id }}"><button type="submit">Verify and stage</button></form></td></tr>
     {% endfor %}
     </tbody>
   </table>
   {% endif %}
+  <form method="post" action="/admin/packs/registry/install">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="registry-backend">Product</label>
+    <select id="registry-backend" name="backend">
+      {% for backend in backend_products %}
+      <option value="{{ backend }}">{{ backend_products[backend] }}</option>
+      {% endfor %}
+    </select>
+    <label for="registry-version">Exact pack version</label>
+    <input id="registry-version" name="version" required placeholder="0.3.0">
+    <button type="submit">Verify and stage exact version</button>
+  </form>
   <form method="post" action="/admin/packs/policy">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label><input type="checkbox" name="unsigned_packs_allowed" {% if unsigned_packs_allowed %}checked{% endif %}> Allow unsigned packs</label>

@@ -17,6 +17,9 @@ import tempfile
 import time
 import unittest
 import urllib.request
+import urllib.parse
+import http.cookiejar
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -287,6 +290,103 @@ class ProductionAppTests(unittest.TestCase):
                 f"{UVICORN_STARTUP_TIMEOUT_SECONDS} seconds:\n{output}"
             )
         self.assertEqual(response_status, 200)
+
+    def test_operator_restart_is_audited_before_clean_uvicorn_exit(self) -> None:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        environment_values = self.environment(
+            PUBLIC_BASE_URL=f"http://127.0.0.1:{port}"
+        )
+        bootstrap = Path(environment_values["ADMIN_BOOTSTRAP_PASSWORD_FILE"])
+        bootstrap.parent.mkdir(parents=True)
+        bootstrap.write_text("synthetic-bootstrap-password")
+        bootstrap.chmod(0o600)
+        environment = {**os.environ, **environment_values}
+        environment.pop("SESSION_SECRET", None)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from vcf_mcp.runner import run; "
+                    f"run(host='127.0.0.1', port={port}, "
+                    "graceful_shutdown_seconds=2)"
+                ),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        output = ""
+        try:
+            deadline = time.monotonic() + UVICORN_STARTUP_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                try:
+                    urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.5
+                    ).close()
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            else:
+                self.fail("uvicorn did not become ready for the restart test")
+
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            opener.open(
+                urllib.request.Request(
+                    f"http://127.0.0.1:{port}/admin/login",
+                    data=urllib.parse.urlencode(
+                        {
+                            "username": "admin",
+                            "password": "synthetic-bootstrap-password",
+                        }
+                    ).encode(),
+                    method="POST",
+                ),
+                timeout=5,
+            ).close()
+            with opener.open(
+                f"http://127.0.0.1:{port}/admin", timeout=5
+            ) as dashboard:
+                dashboard_text = dashboard.read().decode()
+            csrf = re.search(
+                r'name="csrf_token" value="([^"]+)"', dashboard_text
+            )
+            self.assertIsNotNone(csrf)
+            restart_response = opener.open(
+                urllib.request.Request(
+                    f"http://127.0.0.1:{port}/admin/restart",
+                    data=urllib.parse.urlencode(
+                        {"csrf_token": csrf.group(1)}
+                    ).encode(),
+                    method="POST",
+                ),
+                timeout=5,
+            )
+            self.assertEqual(restart_response.status, 202)
+            self.assertIn(
+                "will start the appliance again automatically",
+                restart_response.read().decode(),
+            )
+            output, _ = process.communicate(timeout=10)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                output, _ = process.communicate(timeout=5)
+
+        self.assertEqual(process.returncode, 0, output)
+        with sqlite3.connect(environment_values["CONFIG_DB_PATH"]) as connection:
+            event = connection.execute(
+                "SELECT event_type FROM configuration_events ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(event, ("operator_restart_requested",))
 
 
 class HealthGateTests(unittest.TestCase):

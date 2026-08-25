@@ -61,22 +61,25 @@ Fixture tests make typed calls using Basic authentication, OpsToken, bearer
 tokens, SDDC Manager token pairs, VCF Operations token exchange, and vCenter
 session IDs. They also prove that an operator pack can load alongside the
 official built-in set. Signed-pack tests prove the exact cosign argument
-array, workflow identity, issuer pin, offline bundle use, retention, and
-rollback. They do not contact a lab appliance.
+array, workflow identity, issuer pin, OCI manifest and layer validation,
+offline startup verification, retention, and rollback. A real scratch
+round trip also proves GHCR storage, keyless signing, identity rejection, and
+anonymous pull. These tests do not contact a lab appliance.
 
 ## Prototype boundary
 
 This is a workable lab prototype, not the finished VCF MCP product. Per-endpoint
 token-budget warnings and install refusal remain deferred.
 
-Operator packs are installed from the admin UI, either through the fixed feed
-or by uploading a pack and its Sigstore bundle. The container runs digest-pinned
-cosign and pins verification to
+Operator packs are installed from the admin UI, either through public GHCR
+version discovery or by uploading a pack and its Sigstore bundle while
+disconnected. The container runs digest-pinned cosign and pins verification to
 `.github/workflows/release-packs.yml@refs/heads/main` with the GitHub Actions
-issuer. The immutable default trust root is baked into the image. An operator
-refresh from the fixed URL is persisted on `/data` and takes precedence when
-present. Installation and rollback stage files for the next restart because the
-active registry stays frozen. Unsigned install
+issuer. Registry artifacts are saved locally with their signature material so
+startup verification remains offline. The immutable default trust root is
+baked into the image. An operator refresh from the fixed URL is persisted on
+`/data` and takes precedence when present. Installation and rollback stage
+files for the next restart because the active registry stays frozen. Unsigned install
 is off by default, persistently flagged when enabled, and refused whenever any
 target permits actions. Fingerprint pinning remains intentionally excluded.
 Uploaded CA bundles are the appliance TLS trust mechanism.
@@ -126,7 +129,7 @@ docker build -t vcf-mcp:prototype .
 docker volume create vcf-mcp-data
 docker volume create vcf-mcp-keys
 docker volume create vcf-mcp-audit
-docker run --name vcf-mcp --rm \
+docker run --name vcf-mcp --restart unless-stopped \
   --read-only \
   --user 10001:10001 \
   --security-opt no-new-privileges \
@@ -139,6 +142,10 @@ docker run --name vcf-mcp --rm \
   -v vcf-mcp-audit:/audit \
   vcf-mcp:prototype
 ```
+
+The restart policy is required for the console restart action. Without Compose,
+Kubernetes, or `--restart unless-stopped`, the orderly restart exits the process
+and the appliance stays down until an operator starts it again.
 
 Check readiness with `curl --fail http://localhost:8000/healthz`. A ready
 response is HTTP 200 and reports `audit_writable`, `configuration_ready`,
@@ -154,8 +161,11 @@ available for orchestrated deployments.
 
 1. Register the product targets needed by this appliance. Leave TLS disabled
    only until the correct CA is uploaded.
-2. Restart the container. Backend packs are selected and tool registries are
-   frozen at startup, so the first registration for a product needs a restart.
+2. Use **Restart appliance now** in the startup-frozen endpoints notice.
+   Backend packs are selected and tool registries are frozen at startup, so the
+   first registration for a product needs an orderly process restart. Sessions
+   disconnect. The appliance returns automatically only when its container has
+   a restart policy, or when it runs under Compose or Kubernetes.
 3. Edit each target, upload its CA bundle, enable TLS verification, and save.
 4. Choose local or gateway authorization mode. Changing an existing mode
    revokes every active key.
