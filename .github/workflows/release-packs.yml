@@ -21,7 +21,7 @@ jobs:
   prove-oci-round-trip:
     name: Prove signed OCI pack round trip
     if: github.event_name == 'workflow_dispatch' && inputs.prove_oci_round_trip
-    runs-on: ubuntu-latest
+    runs-on: lab
     permissions:
       contents: read
       id-token: write
@@ -38,11 +38,13 @@ jobs:
           set -euo pipefail
           curl -fsSLo oras.tar.gz https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
           echo "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz" | sha256sum --check
-          tar -xzf oras.tar.gz oras
-          install -m 0755 oras /usr/local/bin/oras
+          mkdir -p "$RUNNER_TEMP/oci-tools"
+          tar -xzf oras.tar.gz -C "$RUNNER_TEMP/oci-tools" oras
+          chmod 0755 "$RUNNER_TEMP/oci-tools/oras"
           curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
           echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
-          install -m 0755 cosign /usr/local/bin/cosign
+          install -m 0755 cosign "$RUNNER_TEMP/oci-tools/cosign"
+          echo "$RUNNER_TEMP/oci-tools" >> "$GITHUB_PATH"
       - name: Push and sign throwaway pack artifact
         id: publish
         env:
@@ -67,7 +69,7 @@ jobs:
   prove-oci-round-trip-anonymous:
     name: Verify and pull OCI pack anonymously
     needs: prove-oci-round-trip
-    runs-on: ubuntu-latest
+    runs-on: lab
     permissions: {}
     steps:
       - name: Install pinned OCI tools
@@ -76,14 +78,17 @@ jobs:
           set -euo pipefail
           curl -fsSLo oras.tar.gz https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
           echo "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz" | sha256sum --check
-          tar -xzf oras.tar.gz oras
-          install -m 0755 oras /usr/local/bin/oras
+          mkdir -p "$RUNNER_TEMP/oci-tools"
+          tar -xzf oras.tar.gz -C "$RUNNER_TEMP/oci-tools" oras
+          chmod 0755 "$RUNNER_TEMP/oci-tools/oras"
           curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
           echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
-          install -m 0755 cosign /usr/local/bin/cosign
+          install -m 0755 cosign "$RUNNER_TEMP/oci-tools/cosign"
+          echo "$RUNNER_TEMP/oci-tools" >> "$GITHUB_PATH"
       - name: Pull without credentials and verify pinned workflow identity
         env:
           DIGEST: ${{ needs.prove-oci-round-trip.outputs.digest }}
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker-config
           EXPECTED_SHA256: ${{ needs.prove-oci-round-trip.outputs.expected-sha256 }}
           REFERENCE: ${{ needs.prove-oci-round-trip.outputs.reference }}
         shell: bash
@@ -91,6 +96,7 @@ jobs:
           set -euo pipefail
           pinned_identity="https://github.com/sentania-labs/vcf-mcp/.github/workflows/release-packs.yml@refs/heads/${GITHUB_REF_NAME}"
           immutable="${REFERENCE}@${DIGEST}"
+          mkdir -p "$DOCKER_CONFIG"
           mkdir anonymous-pull
           oras pull --output anonymous-pull "$immutable"
           actual_sha256="$(sha256sum anonymous-pull/src/vcf_mcp/packs/ops.json | cut -d' ' -f1)"
