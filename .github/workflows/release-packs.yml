@@ -2,6 +2,12 @@ name: Release signed backend packs
 
 on:
   workflow_dispatch:
+    inputs:
+      prove_oci_round_trip:
+        description: Push and verify one throwaway OCI backend-pack artifact
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -12,7 +18,99 @@ permissions:
   contents: read
 
 jobs:
+  prove-oci-round-trip:
+    name: Prove signed OCI pack round trip
+    if: github.event_name == 'workflow_dispatch' && inputs.prove_oci_round_trip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+      reference: ${{ steps.publish.outputs.reference }}
+      expected-sha256: ${{ steps.publish.outputs.expected-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned OCI tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo oras.tar.gz https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
+          echo "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz" | sha256sum --check
+          tar -xzf oras.tar.gz oras
+          install -m 0755 oras /usr/local/bin/oras
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
+          echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
+          install -m 0755 cosign /usr/local/bin/cosign
+      - name: Push and sign throwaway pack artifact
+        id: publish
+        env:
+          GHCR_PASSWORD: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reference="ghcr.io/sentania-labs/vcf-mcp:pack-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s' "$GHCR_PASSWORD" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          oras push \
+            --artifact-type application/vnd.sentania.vcf-mcp.backend-pack.v1+json \
+            --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            "$reference" \
+            src/vcf_mcp/packs/ops.json:application/vnd.sentania.vcf-mcp.backend-pack.v1+json
+          digest="$(oras resolve "$reference")"
+          cosign sign --yes "${reference}@${digest}"
+          echo "reference=$reference" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "expected-sha256=$(sha256sum src/vcf_mcp/packs/ops.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "Published signed non-image OCI artifact: ${reference}@${digest}"
+
+  prove-oci-round-trip-anonymous:
+    name: Verify and pull OCI pack anonymously
+    needs: prove-oci-round-trip
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Install pinned OCI tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo oras.tar.gz https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
+          echo "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz" | sha256sum --check
+          tar -xzf oras.tar.gz oras
+          install -m 0755 oras /usr/local/bin/oras
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
+          echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
+          install -m 0755 cosign /usr/local/bin/cosign
+      - name: Pull without credentials and verify pinned workflow identity
+        env:
+          DIGEST: ${{ needs.prove-oci-round-trip.outputs.digest }}
+          EXPECTED_SHA256: ${{ needs.prove-oci-round-trip.outputs.expected-sha256 }}
+          REFERENCE: ${{ needs.prove-oci-round-trip.outputs.reference }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pinned_identity="https://github.com/sentania-labs/vcf-mcp/.github/workflows/release-packs.yml@refs/heads/${GITHUB_REF_NAME}"
+          immutable="${REFERENCE}@${DIGEST}"
+          mkdir anonymous-pull
+          oras pull --output anonymous-pull "$immutable"
+          actual_sha256="$(sha256sum anonymous-pull/src/vcf_mcp/packs/ops.json | cut -d' ' -f1)"
+          test "$actual_sha256" = "$EXPECTED_SHA256"
+          cosign verify \
+            --certificate-identity "$pinned_identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$immutable" | tee cosign-verification.json
+          if cosign verify \
+            --certificate-identity "${pinned_identity}-wrong" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$immutable" >/dev/null 2>&1; then
+            echo "ERROR: verification accepted the wrong certificate identity" >&2
+            exit 1
+          fi
+          echo "Anonymous pull matched SHA-256: $actual_sha256"
+          echo "Pinned certificate identity verified: $pinned_identity"
+
   sign:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.prove_oci_round_trip }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
