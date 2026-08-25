@@ -21,6 +21,7 @@ from vcf_mcp.pack_trust import (
     PackTrustManager,
     _read_registry_bytes,
     _sha256_digest,
+    _version_sort_key,
 )
 from vcf_mcp.runtime_repository import RuntimeRepository
 
@@ -318,7 +319,17 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
             return httpx.Response(200, json={"token": "anonymous"})
         if "/tags/list" in url:
             if "last=" in url:
-                return httpx.Response(200, json={"tags": [tag, "v0.2.0"]})
+                return httpx.Response(
+                    200,
+                    json={
+                        "tags": [
+                            tag,
+                            f"pack-{pack.backend.value}-0.0.1",
+                            "pack-ops-9.9.9",
+                            "v0.2.0",
+                        ]
+                    },
+                )
             return httpx.Response(
                 200,
                 json={"tags": ["pack-proof-ignored"]},
@@ -330,6 +341,8 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
                 },
             )
         if "/manifests/" in url:
+            if "pack-ops-9.9.9" in url:
+                return httpx.Response(404)
             return httpx.Response(
                 200,
                 content=manifest_bytes,
@@ -351,9 +364,14 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
 
     monkeypatch.setattr(httpx, "AsyncClient", fixture_client)
 
-    entries = await manager.registry_catalog()
+    catalog = await manager.registry_catalog()
+    entries = catalog.entries
 
     assert len(entries) == 1
+    assert len(catalog.skipped) == 1
+    assert catalog.skipped[0]["tag"] == "pack-ops-9.9.9"
+    assert catalog.skipped[0]["backend"] == "ops"
+    assert "404" in catalog.skipped[0]["reason"]
     assert entries[0]["id"] == f"{pack.backend.value}:{pack.version}"
     assert entries[0]["manifest_digest"] == manifest_digest
     assert entries[0]["tool_count"] == len(pack.tools)
@@ -368,6 +386,11 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
     assert arguments[-1] == (
         f"{PACK_REGISTRY_REFERENCE}:{tag}@{manifest_digest}"
     )
+
+
+def test_registry_newest_version_selection_orders_numerically() -> None:
+    assert _version_sort_key("1.10.0") > _version_sort_key("1.2.0")
+    assert _version_sort_key("2.0.0") > _version_sort_key("1.99.9")
 
 
 @pytest.mark.asyncio
@@ -426,24 +449,19 @@ async def test_registry_pack_keeps_offline_startup_verification_and_rollback(
         manifest_digest = _write_oci_layout(fixture, pack_bytes)
         pack = manager._load_bytes(pack_bytes)
 
-        async def catalog():
-            return (
-                {
-                    "id": f"{pack.backend.value}:{pack.version}",
-                    "backend": pack.backend.value,
-                    "version": pack.version,
-                    "reference": (
-                        f"{PACK_REGISTRY_REFERENCE}:"
-                        f"pack-{pack.backend.value}-{pack.version}"
-                    ),
-                    "manifest_digest": manifest_digest,
-                },
-            )
+        async def entry_for_tag(backend, version):
+            return {
+                "reference": (
+                    f"{PACK_REGISTRY_REFERENCE}:"
+                    f"pack-{backend.value}-{version}"
+                ),
+                "manifest_digest": manifest_digest,
+            }
 
         def save(_reference: str, destination: Path) -> None:
             _write_oci_layout(destination, pack_bytes)
 
-        monkeypatch.setattr(manager, "registry_catalog", catalog)
+        monkeypatch.setattr(manager, "_registry_entry_for_tag", entry_for_tag)
         monkeypatch.setattr(manager, "_save_oci_reference", save)
         staged = await manager.install_from_registry(
             f"{pack.backend.value}:{pack.version}"

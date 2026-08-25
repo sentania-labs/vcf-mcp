@@ -254,6 +254,10 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit">Check signed pack registry</button>
   </form>
+  <p class="muted">The registry check inspects and lists only the newest published version per product. Older signed versions stay installable through the exact-version form below.</p>
+  {% for skipped in pack_registry_skipped %}
+  <p class="warning">Registry tag {{ skipped.tag }} for {{ backend_products.get(skipped.backend, skipped.backend) }} could not be listed: {{ skipped.reason }}</p>
+  {% endfor %}
   {% if pack_registry_entries %}
   <table>
     <thead><tr><th>Backend</th><th>Installed</th><th>Available</th><th>Tool count</th><th>Estimated tokens</th><th></th></tr></thead>
@@ -264,6 +268,18 @@
     </tbody>
   </table>
   {% endif %}
+  <form method="post" action="/admin/packs/registry/install">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="registry-backend">Product</label>
+    <select id="registry-backend" name="backend">
+      {% for backend in backend_products %}
+      <option value="{{ backend }}">{{ backend_products[backend] }}</option>
+      {% endfor %}
+    </select>
+    <label for="registry-version">Exact pack version</label>
+    <input id="registry-version" name="version" required placeholder="0.3.0">
+    <button type="submit">Verify and stage exact version</button>
+  </form>
   <form method="post" action="/admin/packs/policy">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label><input type="checkbox" name="unsigned_packs_allowed" {% if unsigned_packs_allowed %}checked{% endif %}> Allow unsigned packs</label>

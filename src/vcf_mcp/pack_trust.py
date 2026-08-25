@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -55,6 +56,12 @@ MAX_TRUST_ROOT_BYTES = 1024 * 1024
 
 class PackTrustError(RuntimeError):
     """A pack was refused without exposing verifier output."""
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryCatalog:
+    entries: tuple[dict[str, object], ...]
+    skipped: tuple[dict[str, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,23 +195,11 @@ class PackTrustManager:
         )
         return digest
 
-    async def registry_catalog(self) -> tuple[dict[str, object], ...]:
-        """Discover signed pack versions from GHCR's tag and manifest APIs."""
+    async def registry_catalog(self) -> RegistryCatalog:
+        """Discover the newest signed pack version per backend from GHCR."""
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            _, token_bytes, _ = await _read_registry_bytes(
-                client,
-                PACK_REGISTRY_TOKEN_URL,
-                max_bytes=MAX_BUNDLE_BYTES,
-                description="registry token response",
-            )
-            try:
-                token = json.loads(token_bytes)["token"]
-                if not isinstance(token, str) or not token:
-                    raise TypeError
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise PackTrustError("registry token response is malformed") from exc
-            headers = {"Authorization": f"Bearer {token}"}
+            headers = await _registry_pull_headers(client)
             tags: list[str] = []
             page_url = str(
                 httpx.URL(
@@ -241,46 +236,84 @@ class PackTrustManager:
                     "registry tag listing exceeded the pagination limit"
                 )
 
-            entries: list[dict[str, object]] = []
-            for tag in sorted(str(value) for value in tags):
+            skipped: list[dict[str, str]] = []
+            newest: dict[BackendKind, tuple[tuple[object, ...], str, str]] = {}
+            for tag in sorted({str(value) for value in tags}):
                 parsed = _pack_tag_parts(tag)
                 if parsed is None:
                     continue
                 backend, version = parsed
-                entry = await self._registry_entry(
-                    client,
-                    headers=headers,
-                    tag=tag,
-                    backend=backend,
-                    version=version,
-                )
-                entries.append(entry)
-        return tuple(
-            sorted(
-                entries,
-                key=lambda entry: (str(entry["backend"]), str(entry["version"])),
-            )
-        )
+                try:
+                    _safe_version(version)
+                except PackTrustError as exc:
+                    skipped.append(
+                        {"tag": tag, "backend": backend.value, "reason": str(exc)}
+                    )
+                    continue
+                key = _version_sort_key(version)
+                if backend not in newest or key > newest[backend][0]:
+                    newest[backend] = (key, version, tag)
+
+            entries: list[dict[str, object]] = []
+            for backend in sorted(newest, key=lambda value: value.value):
+                _, version, tag = newest[backend]
+                try:
+                    entries.append(
+                        await self._registry_entry(
+                            client,
+                            headers=headers,
+                            tag=tag,
+                            backend=backend,
+                            version=version,
+                        )
+                    )
+                except PackTrustError as exc:
+                    skipped.append(
+                        {"tag": tag, "backend": backend.value, "reason": str(exc)}
+                    )
+                except httpx.HTTPError as exc:
+                    skipped.append(
+                        {
+                            "tag": tag,
+                            "backend": backend.value,
+                            "reason": f"registry request failed: {exc}",
+                        }
+                    )
+        return RegistryCatalog(entries=tuple(entries), skipped=tuple(skipped))
 
     async def install_from_registry(self, entry_id: str) -> PackInstallResult:
-        entries = await self.registry_catalog()
-        entry = next(
-            (
-                candidate
-                for candidate in entries
-                if str(candidate.get("id")) == entry_id
-            ),
-            None,
-        )
-        if entry is None:
-            raise PackTrustError("registry pack selection is no longer available")
+        backend_value, separator, version = entry_id.partition(":")
+        if not separator or not version.strip():
+            raise PackTrustError("registry pack selection must name a version")
+        try:
+            backend = BackendKind(backend_value.strip())
+        except ValueError as exc:
+            raise PackTrustError(
+                "registry pack selection names an unknown backend"
+            ) from exc
+        version = _safe_version(version.strip())
+        entry = await self._registry_entry_for_tag(backend, version)
         return await asyncio.to_thread(
             self._install_from_registry_sync,
             str(entry["reference"]),
             str(entry["manifest_digest"]),
-            BackendKind(str(entry["backend"])),
-            str(entry["version"]),
+            backend,
+            version,
         )
+
+    async def _registry_entry_for_tag(
+        self, backend: BackendKind, version: str
+    ) -> dict[str, object]:
+        tag = f"{PACK_TAG_PREFIX}{backend.value}-{version}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = await _registry_pull_headers(client)
+            return await self._registry_entry(
+                client,
+                headers=headers,
+                tag=tag,
+                backend=backend,
+                version=version,
+            )
 
     async def _registry_entry(
         self,
@@ -868,9 +901,31 @@ def _pack_tag_parts(tag: str) -> tuple[BackendKind, str] | None:
     for backend in sorted(BackendKind, key=lambda value: len(value.value), reverse=True):
         prefix = f"{PACK_TAG_PREFIX}{backend.value}-"
         if tag.startswith(prefix):
-            version = tag.removeprefix(prefix)
-            return backend, _safe_version(version)
+            return backend, tag.removeprefix(prefix)
     return None
+
+
+def _version_sort_key(version: str) -> tuple[object, ...]:
+    return tuple(
+        (0, int(segment), "") if segment.isdigit() else (1, 0, segment)
+        for segment in re.split(r"[._-]", version)
+    )
+
+
+async def _registry_pull_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    _, token_bytes, _ = await _read_registry_bytes(
+        client,
+        PACK_REGISTRY_TOKEN_URL,
+        max_bytes=MAX_BUNDLE_BYTES,
+        description="registry token response",
+    )
+    try:
+        token = json.loads(token_bytes)["token"]
+        if not isinstance(token, str) or not token:
+            raise TypeError
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PackTrustError("registry token response is malformed") from exc
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _validated_sha256_digest(value: str) -> str:

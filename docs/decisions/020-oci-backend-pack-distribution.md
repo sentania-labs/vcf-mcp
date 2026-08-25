@@ -64,14 +64,21 @@ visibility settings that could drift independently.
 The publisher pushes one JSON layer with a pack-specific OCI media type,
 resolves the immutable manifest digest, and signs that digest through the
 unchanged `release-packs.yml` workflow. Existing version tags are immutable:
-a rerun accepts a matching, correctly signed artifact and refuses changed
-bytes under the same version. A credential-free job then pulls and verifies
-every published pack with the exact main-branch workflow identity and GitHub
-OIDC issuer.
+a rerun accepts a matching, correctly signed artifact, re-signs the same
+digest when the matching bytes are missing a valid signature (Firstmate's
+review decision, so a publish interrupted before signing self-heals), and
+refuses changed bytes under the same version. A credential-free job then
+pulls and verifies every published pack with the exact main-branch workflow
+identity and GitHub OIDC issuer.
 
 The appliance asks GHCR for tags, maps product-specific tag prefixes to pack
-versions, validates each OCI manifest and layer digest, and shows the
-validated version, tool count, and estimated definition tokens before the
+versions, and, per Firstmate's review decisions, inspects only the newest
+version per product, skips any unusable tag while surfacing the tag, its
+product, and the concrete refusal reason in the console, and offers an
+exact-version form so an operator can name and install a specific older
+signed version without enumerating all history. For each listed version it
+validates the OCI manifest and layer digest and shows the validated version,
+tool count, and estimated definition tokens before the
 operator selects an update. Installation saves the OCI artifact and its
 cosign signature as a local OCI layout archive. Confirmation, rollback, and
 startup each verify that local archive with the shipped trust root before

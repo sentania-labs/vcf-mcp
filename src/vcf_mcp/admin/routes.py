@@ -486,10 +486,14 @@ async def post_pack_registry_check(request: Request):
             request, "error.html", {"message": "CSRF verification failed."}, status_code=403
         )
     try:
-        entries = await _pack_manager(request).registry_catalog()
+        catalog = await _pack_manager(request).registry_catalog()
     except (PackTrustError, httpx.HTTPError) as exc:
         return await _dashboard_response(request, error=str(exc), status_code=502)
-    return await _dashboard_response(request, registry_entries=entries)
+    return await _dashboard_response(
+        request,
+        registry_entries=catalog.entries,
+        registry_skipped=catalog.skipped,
+    )
 
 
 async def post_pack_registry_install(request: Request):
@@ -504,10 +508,14 @@ async def post_pack_registry_install(request: Request):
         return templates.TemplateResponse(
             request, "error.html", {"message": "CSRF verification failed."}, status_code=403
         )
-    try:
-        result = await _pack_manager(request).install_from_registry(
-            str(form.get("entry_id", ""))
+    entry_id = str(form.get("entry_id", "")).strip()
+    if not entry_id:
+        entry_id = (
+            f"{str(form.get('backend', '')).strip()}"
+            f":{str(form.get('version', '')).strip()}"
         )
+    try:
+        result = await _pack_manager(request).install_from_registry(entry_id)
     except (PackTrustError, httpx.HTTPError) as exc:
         return await _dashboard_response(request, error=str(exc), status_code=502)
     auth.rotate_session(request)
@@ -664,6 +672,7 @@ async def _dashboard_response(
     error: str | None = None,
     status_code: int = 200,
     registry_entries: tuple[dict[str, object], ...] = (),
+    registry_skipped: tuple[dict[str, str], ...] = (),
 ):
     repository = _repository(request)
     surfaces = getattr(request.app.state, "mcp_surfaces", None)
@@ -701,6 +710,7 @@ async def _dashboard_response(
                 else ()
             ),
             "pack_registry_entries": registry_entries,
+            "pack_registry_skipped": registry_skipped,
             "installed_pack_versions": {
                 pack.backend.value: pack.version for pack in backend_packs
             },

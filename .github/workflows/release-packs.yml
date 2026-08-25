@@ -270,10 +270,16 @@ jobs:
               oras pull --output "$pull_dir" "${reference}@${digest}"
               actual_sha256="$(sha256sum "$pull_dir/$pack" | cut -d' ' -f1)"
               test "$actual_sha256" = "$expected_sha256"
-              cosign verify \
+              if ! cosign verify \
                 --certificate-identity https://github.com/sentania-labs/vcf-mcp/.github/workflows/release-packs.yml@refs/heads/main \
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-                "${reference}@${digest}" >/dev/null
+                "${reference}@${digest}" >/dev/null 2>&1; then
+                cosign sign --yes "${reference}@${digest}"
+                cosign verify \
+                  --certificate-identity https://github.com/sentania-labs/vcf-mcp/.github/workflows/release-packs.yml@refs/heads/main \
+                  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                  "${reference}@${digest}" >/dev/null
+              fi
             else
               oras push \
                 --artifact-type application/vnd.sentania.vcf-mcp.backend-pack.v1+json \

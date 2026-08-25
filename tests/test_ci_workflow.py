@@ -101,6 +101,7 @@ def test_pack_workflow_publishes_signed_immutable_oci_artifacts() -> None:
     assert "id-token: write" in text
     assert "oras push" in text
     assert "cosign sign --yes \"${reference}@${digest}\"" in text
+    assert "if ! cosign verify" in text
     assert "pack-${backend}-${version}" in text
     assert (
         "release-packs.yml@refs/heads/main" in text
