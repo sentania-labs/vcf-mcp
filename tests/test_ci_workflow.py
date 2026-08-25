@@ -43,11 +43,10 @@ def test_build_workflow_publishes_the_repository_image_without_deploying() -> No
         assert deployment_reference not in text
 
 
-def test_release_publishes_and_anonymously_pulls_a_versioned_image() -> None:
+def test_release_publishes_a_versioned_image_and_creates_a_release() -> None:
     text = RELEASE_WORKFLOW.read_text()
     assert '      - "v*.*.*"' in text
     assert "ghcr.io/sentania-labs/vcf-mcp:${{ github.ref_name }}" in text
-    assert 'DOCKER_CONFIG="$anonymous_config" docker pull "$image"' in text
     assert 'gh release create "$GITHUB_REF_NAME"' in text
 
 
@@ -66,8 +65,30 @@ def test_image_builds_use_the_shared_remote_buildkit() -> None:
         assert "docker/build-push-action@v6" in text
 
 
-def test_every_workflow_job_targets_the_lab_runner_pool() -> None:
+def test_smoke_job_pulls_and_runs_without_registry_credentials() -> None:
+    text = RELEASE_WORKFLOW.read_text()
+    smoke_job = text.split("  smoke:", 1)[1].split("  release:", 1)[0]
+    assert "runs-on: ubuntu-latest" in smoke_job
+    assert "docker/login-action" not in smoke_job
+    assert 'docker pull "$image"' in smoke_job
+    assert "docker run --detach" in smoke_job
+    assert "curl --fail --silent --show-error" in smoke_job
+    assert "http://127.0.0.1:18080/healthz" in smoke_job
+
+
+def test_public_visibility_check_remains_daemon_free() -> None:
+    text = RELEASE_WORKFLOW.read_text()
+    verify_job = text.split("  verify:", 1)[1].split("  smoke:", 1)[0]
+    assert "Publish and verify public package visibility" in verify_job
+    assert "gh api" in verify_job
+    assert "docker " not in verify_job
+
+
+def test_only_the_outside_cluster_smoke_job_uses_github_hosted_runner() -> None:
+    release_text = RELEASE_WORKFLOW.read_text()
+    assert release_text.count("runs-on: ubuntu-latest") == 1
+
     for workflow in WORKFLOW_DIR.glob("*.yml"):
         for line in workflow.read_text().splitlines():
             if line.strip().startswith("runs-on:"):
-                assert line.strip() == "runs-on: lab", workflow
+                assert line.strip() in ("runs-on: lab", "runs-on: ubuntu-latest"), workflow

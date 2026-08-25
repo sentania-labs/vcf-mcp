@@ -105,15 +105,40 @@ jobs:
             exit 1
           fi
 
-      - name: Prove a credential-free pull works
+  smoke:
+    name: Smoke test published image
+    needs: verify
+    # This verifies the product from outside the cluster as a stranger would.
+    # A GitHub-hosted runner is correct by design, not an exemption from the
+    # lab runner rule for project build and release jobs.
+    runs-on: ubuntu-latest
+    if: github.repository == 'sentania-labs/vcf-mcp'
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Pull and start published image without registry credentials
         run: |
           image="ghcr.io/sentania-labs/vcf-mcp:$GITHUB_REF_NAME"
-          anonymous_config="$(mktemp -d "$RUNNER_TEMP/anonymous-docker.XXXXXX")"
-          DOCKER_CONFIG="$anonymous_config" docker pull "$image"
+          docker pull "$image"
+          docker run --detach \
+            --name vcf-mcp-release-smoke \
+            --publish 127.0.0.1:18080:8000 \
+            "$image"
+
+      - name: Assert health endpoint answers
+        run: |
+          for _ in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs vcf-mcp-release-smoke
+          exit 1
 
   release:
     name: Create GitHub release
-    needs: verify
+    needs: smoke
     runs-on: lab
     if: github.repository == 'sentania-labs/vcf-mcp'
     timeout-minutes: 10
