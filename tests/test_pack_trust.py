@@ -321,10 +321,22 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
             request = httpx.Request("GET", url)
             if url.startswith("https://ghcr.io/token"):
                 return httpx.Response(200, json={"token": "anonymous"}, request=request)
-            if url.endswith("/tags/list"):
+            if "/tags/list" in url:
+                if "last=" in url:
+                    return httpx.Response(
+                        200,
+                        json={"tags": [tag, "v0.2.0"]},
+                        request=request,
+                    )
                 return httpx.Response(
                     200,
-                    json={"tags": [tag, "pack-proof-ignored", "v0.2.0"]},
+                    json={"tags": ["pack-proof-ignored"]},
+                    headers={
+                        "Link": (
+                            "</v2/sentania-labs/vcf-mcp/tags/list"
+                            '?last=pack-proof-ignored&n=1000>; rel="next"'
+                        )
+                    },
                     request=request,
                 )
             if "/manifests/" in url:

@@ -27,6 +27,7 @@ PACK_CERTIFICATE_IDENTITY = (
 )
 PACK_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com"
 PACK_REGISTRY = "ghcr.io"
+MAX_REGISTRY_TAG_PAGES = 50
 PACK_REGISTRY_REPOSITORY = "sentania-labs/vcf-mcp"
 PACK_REGISTRY_REFERENCE = f"{PACK_REGISTRY}/{PACK_REGISTRY_REPOSITORY}"
 PACK_REGISTRY_TOKEN_URL = (
@@ -195,18 +196,34 @@ class PackTrustManager:
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise PackTrustError("registry token response is malformed") from exc
             headers = {"Authorization": f"Bearer {token}"}
-            tags_response = await client.get(
-                f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}/tags/list",
-                params={"n": "1000"},
-                headers=headers,
+            tags: list[str] = []
+            page_url = str(
+                httpx.URL(
+                    f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}"
+                    "/tags/list",
+                    params={"n": "1000"},
+                )
             )
-            tags_response.raise_for_status()
-            try:
-                tags = tags_response.json().get("tags", [])
-                if not isinstance(tags, list):
-                    raise TypeError
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise PackTrustError("registry tag response is malformed") from exc
+            for _ in range(MAX_REGISTRY_TAG_PAGES):
+                tags_response = await client.get(page_url, headers=headers)
+                tags_response.raise_for_status()
+                try:
+                    page_tags = tags_response.json().get("tags", [])
+                    if not isinstance(page_tags, list):
+                        raise TypeError
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise PackTrustError(
+                        "registry tag response is malformed"
+                    ) from exc
+                tags.extend(str(value) for value in page_tags)
+                next_link = tags_response.links.get("next", {}).get("url")
+                if not next_link:
+                    break
+                page_url = str(httpx.URL(page_url).join(next_link))
+            else:
+                raise PackTrustError(
+                    "registry tag listing exceeded the pagination limit"
+                )
 
             entries: list[dict[str, object]] = []
             for tag in sorted(str(value) for value in tags):
