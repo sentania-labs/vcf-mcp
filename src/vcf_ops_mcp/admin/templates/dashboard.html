@@ -2,8 +2,8 @@
 {% block content %}
 <div style="display:flex; justify-content:space-between; gap:1rem; align-items:center">
   <div>
-    <h1>Multi-backend prototype</h1>
-    <p class="muted">Register Operations and vCenter backends, edit their trust and credentials, then mint endpoint-scoped keys. Actions are not implemented.</p>
+    <h1>VCF backend estate</h1>
+    <p class="muted">Register a product backend, edit its trust and credentials, then mint endpoint-scoped keys. Actions are not implemented.</p>
   </div>
   <form method="post" action="/admin/logout">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -17,8 +17,9 @@
   <p>Backend tools are derived from registrations at process start. After adding the first target for a product, restart the container to activate its endpoint. Removing runtime loading keeps the dispatcher boundary fixed.</p>
   <div class="endpoint-grid">
     <div><code>/vcf/mcp</code><br><span class="badge good">management</span></div>
-    <div><code>/ops/mcp</code><br><span class="badge {{ 'good' if 'ops' in wired_endpoints else '' }}">{{ 'wired' if 'ops' in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', 'ops')|list else 'not registered' }}</span></div>
-    <div><code>/vcenter/mcp</code><br><span class="badge {{ 'good' if 'vcenter' in wired_endpoints else '' }}">{{ 'wired' if 'vcenter' in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', 'vcenter')|list else 'not registered' }}</span></div>
+    {% for pack in backend_packs %}
+    <div><code>/{{ pack.endpoint }}/mcp</code><br><span class="badge {{ 'good' if pack.endpoint in wired_endpoints else '' }}">{{ 'wired' if pack.endpoint in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', pack.backend.value)|list else 'not registered' }}</span></div>
+    {% endfor %}
   </div>
 </section>
 
@@ -30,8 +31,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="backend">Product</label>
       <select id="backend" name="backend">
-        {% for backend in backend_kinds %}
-        <option value="{{ backend.value }}">{{ 'VCF Operations' if backend.value == 'ops' else 'vCenter Server' }}</option>
+        {% for pack in backend_packs %}
+        <option value="{{ pack.backend.value }}">{{ pack.product }}</option>
         {% endfor %}
       </select>
       <label for="name">Display name</label>
@@ -42,7 +43,7 @@
       <input id="username" name="username" autocomplete="off" required>
       <label for="password">Service-account password</label>
       <input id="password" name="password" type="password" autocomplete="new-password" required>
-      <label for="auth_source">Operations authentication source</label>
+      <label for="auth_source">Authentication source (when required)</label>
       <select id="auth_source" name="auth_source">
         <option value="LOCAL">Local users (LOCAL)</option>
       </select>
@@ -101,7 +102,7 @@
       <div class="grid compact">
         <div>
           <label>Product</label>
-          <input value="{{ 'VCF Operations' if target.backend.value == 'ops' else 'vCenter Server' }}" disabled>
+          <input value="{{ backend_products[target.backend.value] }}" disabled>
         </div>
         <div>
           <label for="name-{{ target.id }}">Display name</label>
@@ -127,7 +128,7 @@
           <input id="password-{{ target.id }}" name="password" type="password" autocomplete="new-password">
         </div>
         <div>
-          <label for="auth-{{ target.id }}">Operations authentication source</label>
+          <label for="auth-{{ target.id }}">Authentication source (when required)</label>
           <select id="auth-{{ target.id }}" name="auth_source">
             <option value="LOCAL" selected>Local users (LOCAL)</option>
           </select>

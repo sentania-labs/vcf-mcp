@@ -12,6 +12,7 @@ from starlette.routing import Route
 from starlette.templating import Jinja2Templates
 
 from vcf_ops_mcp.admin import auth
+from vcf_ops_mcp.backend_packs import load_backend_packs
 from vcf_ops_mcp.contracts import (
     BackendKind,
     ConfigurationGeneration,
@@ -360,6 +361,16 @@ async def _dashboard_response(
     wired_endpoints = (
         frozenset(surfaces.by_endpoint) if surfaces is not None else frozenset({"vcf"})
     )
+    if surfaces is not None:
+        packs = surfaces.packs
+    else:
+        try:
+            packs = load_backend_packs()
+        except Exception:
+            packs = {}
+    backend_packs = tuple(
+        sorted(packs.values(), key=lambda pack: pack.product.casefold())
+    )
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -369,8 +380,14 @@ async def _dashboard_response(
             "grantable_scopes": sorted(
                 str(scope) for scope in await repository.grantable_scopes()
             ),
-            "backend_kinds": tuple(BackendKind),
-            "endpoint_names": ("vcf", "ops", "vcenter"),
+            "backend_packs": backend_packs,
+            "backend_products": {
+                pack.backend.value: pack.product for pack in backend_packs
+            },
+            "endpoint_names": (
+                "vcf",
+                *(pack.endpoint for pack in backend_packs),
+            ),
             "wired_endpoints": wired_endpoints,
             "csrf_token": request.session["csrf_token"],
             "error": error,

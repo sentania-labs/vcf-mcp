@@ -30,11 +30,12 @@ VCF Private AI Services. VCF Ops targets (FQDN, credentials, auth source)
 are post-deployment configuration entered through the admin UI, never
 baked into the image or CI.
 
-Since the multi-backend prototype (decisions 016 and 017), the server is
-multi-backend: each registered product gets its own startup-frozen MCP
-endpoint (`/ops/mcp` for VCF Operations, `/vcenter/mcp` for vCenter,
-`/vcf/mcp` for read-only management), and backends are defined as
-data-only packs. `docs/SPEC.md` is the historical v1 design contract and
+Since the multi-backend prototype (decisions 016 through 018), the server
+is multi-backend: product MCP endpoints are derived at startup from the
+registered backends and frozen for the process lifetime. Endpoint names
+such as `/ops/mcp` for VCF Operations or `/vcf/mcp` for read-only
+management are examples, not a fixed or exhaustive list; `README.md` owns
+the current per-product list. Backends are defined as data-only packs. `docs/SPEC.md` is the historical v1 design contract and
 is superseded wherever it disagrees with the captain's 2026-08-24
 kickoff specification (which lives outside this repo).
 

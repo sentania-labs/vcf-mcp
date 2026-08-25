@@ -182,6 +182,41 @@ def test_v1_schema_migration_rolls_back_every_column_on_failure(
 
 
 @pytest.mark.asyncio
+async def test_v2_runtime_store_migrates_for_remaining_backend_identities(
+    repository: RuntimeRepository,
+) -> None:
+    database_path = repository.database_path
+    keyring_path = repository.keyring_path
+    repository.close()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("UPDATE schema_version SET version = 2")
+        connection.commit()
+
+    migrated = RuntimeRepository(
+        database_path,
+        keyring_path,
+        grantable_scopes=SCOPES,
+    )
+    migrated.bootstrap()
+    try:
+        target = await migrated.create_target(
+            name="fixture-nsx",
+            fqdn="nsx.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+            backend=BackendKind.NSX,
+        )
+        stored = await migrated.get(target.id)
+    finally:
+        migrated.close()
+
+    assert stored is not None
+    assert stored.backend is BackendKind.NSX
+
+
+@pytest.mark.asyncio
 async def test_target_edit_rotates_credentials_and_ca_in_one_encrypted_store(
     repository: RuntimeRepository,
 ) -> None:

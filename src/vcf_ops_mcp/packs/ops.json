@@ -9,6 +9,7 @@
   "api_root": "/suite-api",
   "source": "Inherited measured contracts in docs/read-plane.md, based on the official VCF Operations OpenAPI and live read-only recon",
   "unsigned": true,
+  "projection_keys": ["id", "name", "key", "status", "type", "value", "values", "items", "count", "page", "pageInfo", "resourceKey", "resourceStatusStates", "statKey", "timestamps", "data", "links"],
   "caps": {"max_page_size": 200, "metrics_cells": 5000, "max_response_bytes": 8388608},
   "tools": [
     {"name":"list_adapter_kinds","summary":"List VCF Operations adapter kinds.","capability":"read:inventory","method":"GET","path":"/api/adapterkinds","projection":"adapter_kind.v1"},

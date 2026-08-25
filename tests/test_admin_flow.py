@@ -87,6 +87,11 @@ def test_bootstrap_login_target_registration_and_key_mint(
 
             dashboard = client.get("/admin")
             assert dashboard.status_code == 200
+            assert ">NSX<" in dashboard.text
+            assert "VCF Log Management" in dashboard.text
+            assert "vSAN Data Protection" in dashboard.text
+            assert "/nsx/mcp" in dashboard.text
+            assert "/vsan-dp/mcp" in dashboard.text
             csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
             assert csrf is not None
 

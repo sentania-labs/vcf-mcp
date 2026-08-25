@@ -17,6 +17,7 @@ from vcf_ops_mcp.contracts import (
 )
 from vcf_ops_mcp.mcp_server import BackendClientPool
 from vcf_ops_mcp.vcenter import (
+    HANDLERS,
     VcenterTargetClient,
     list_vcenter_hosts,
     list_vcenter_vms,
@@ -80,6 +81,65 @@ class CountingStream(httpx.AsyncByteStream):
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+VCENTER_HANDLER_FIXTURES = (
+    ("list_vcenter_vms", {"vms": ["vm-1"], "names": ["vm"], "folders": ["folder-1"], "datacenters": ["dc-1"], "hosts": ["host-1"], "clusters": ["cluster-1"], "resource_pools": ["resgroup-1"], "power_states": ["POWERED_ON"]}, "/api/vcenter/vm", {"vms": "vm-1", "names": "vm", "folders": "folder-1", "datacenters": "dc-1", "hosts": "host-1", "clusters": "cluster-1", "resource_pools": "resgroup-1", "power_states": "POWERED_ON"}, [{"vm": "vm-1", "name": "fixture", "hidden": "discard"}]),
+    ("get_vcenter_vm", {"vm": "vm-1"}, "/api/vcenter/vm/vm-1", {}, {"name": "fixture", "hidden": "discard"}),
+    ("list_vcenter_hosts", {"hosts": ["host-1"], "names": ["esx"], "folders": ["folder-1"], "datacenters": ["dc-1"], "clusters": ["cluster-1"], "connection_states": ["CONNECTED"], "standalone": True}, "/api/vcenter/host", {"hosts": "host-1", "names": "esx", "folders": "folder-1", "datacenters": "dc-1", "clusters": "cluster-1", "connection_states": "CONNECTED", "standalone": "true"}, [{"host": "host-1", "hidden": "discard"}]),
+    ("list_vcenter_clusters", {"clusters": ["cluster-1"], "names": ["cluster"], "folders": ["folder-1"], "datacenters": ["dc-1"]}, "/api/vcenter/cluster", {"clusters": "cluster-1", "names": "cluster", "folders": "folder-1", "datacenters": "dc-1"}, [{"cluster": "cluster-1", "hidden": "discard"}]),
+    ("get_vcenter_cluster", {"cluster": "cluster-1"}, "/api/vcenter/cluster/cluster-1", {}, {"name": "fixture", "hidden": "discard"}),
+    ("list_vcenter_datacenters", {"datacenters": ["dc-1"], "names": ["dc"], "folders": ["folder-1"]}, "/api/vcenter/datacenter", {"datacenters": "dc-1", "names": "dc", "folders": "folder-1"}, [{"datacenter": "dc-1", "hidden": "discard"}]),
+    ("get_vcenter_datacenter", {"datacenter": "dc-1"}, "/api/vcenter/datacenter/dc-1", {}, {"name": "fixture", "hidden": "discard"}),
+    ("list_vcenter_datastores", {"datastores": ["datastore-1"], "names": ["ds"], "types": ["VMFS"], "folders": ["folder-1"], "datacenters": ["dc-1"]}, "/api/vcenter/datastore", {"datastores": "datastore-1", "names": "ds", "types": "VMFS", "folders": "folder-1", "datacenters": "dc-1"}, [{"datastore": "datastore-1", "hidden": "discard"}]),
+    ("get_vcenter_datastore", {"datastore": "datastore-1"}, "/api/vcenter/datastore/datastore-1", {}, {"name": "fixture", "hidden": "discard"}),
+    ("list_vcenter_resource_pools", {"resource_pools": ["resgroup-1"], "names": ["pool"], "parent_resource_pools": ["resgroup-0"], "datacenters": ["dc-1"], "hosts": ["host-1"], "clusters": ["cluster-1"]}, "/api/vcenter/resource-pool", {"resource_pools": "resgroup-1", "names": "pool", "parent_resource_pools": "resgroup-0", "datacenters": "dc-1", "hosts": "host-1", "clusters": "cluster-1"}, [{"resource_pool": "resgroup-1", "hidden": "discard"}]),
+    ("get_vcenter_resource_pool", {"resource_pool": "resgroup-1"}, "/api/vcenter/resource-pool/resgroup-1", {}, {"name": "fixture", "hidden": "discard"}),
+    ("list_vcenter_folders", {"folders": ["folder-1"], "names": ["folder"], "parent_folders": ["folder-0"], "datacenters": ["dc-1"]}, "/api/vcenter/folder", {"folders": "folder-1", "names": "folder", "parent_folders": "folder-0", "datacenters": "dc-1"}, [{"folder": "folder-1", "hidden": "discard"}]),
+    ("list_vcenter_networks", {"networks": ["network-1"], "names": ["network"], "types": ["STANDARD_PORTGROUP"], "folders": ["folder-1"], "datacenters": ["dc-1"]}, "/api/vcenter/network", {"networks": "network-1", "names": "network", "types": "STANDARD_PORTGROUP", "folders": "folder-1", "datacenters": "dc-1"}, [{"network": "network-1", "hidden": "discard"}]),
+    ("list_vcenter_storage_policies", {"policies": ["policy-1"]}, "/api/vcenter/storage/policies", {"policies": "policy-1"}, [{"policy": "policy-1", "hidden": "discard"}]),
+    ("list_vcenter_content_libraries", {}, "/api/content/library", {}, ["library-1"]),
+    ("get_vcenter_content_library", {"library_id": "library-1"}, "/api/content/library/library-1", {}, {"id": "library-1", "name": "fixture", "hidden": "discard"}),
+    ("list_vcenter_content_library_items", {"library_id": "library-1"}, "/api/content/library/item", {"library_id": "library-1"}, ["item-1"]),
+    ("get_vcenter_content_library_item", {"library_item_id": "item-1"}, "/api/content/library/item/item-1", {}, {"id": "item-1", "name": "fixture", "hidden": "discard"}),
+    ("get_vcenter_session", {}, "/api/session", {}, {"user": "fixture-user", "hidden": "discard"}),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "expected_path", "expected_query", "fixture_body"),
+    VCENTER_HANDLER_FIXTURES,
+)
+async def test_every_vcenter_tool_uses_its_frozen_fixture_contract(
+    tool_name: str,
+    arguments: dict[str, object],
+    expected_path: str,
+    expected_query: dict[str, str],
+    fixture_body: object,
+) -> None:
+    reads = 0
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        nonlocal reads
+        if request.url.path == "/api/session" and request.method == "POST":
+            return httpx.Response(201, json="fixture-session")
+        if request.url.path == "/api/session" and request.method == "DELETE":
+            return httpx.Response(204)
+        reads += 1
+        assert request.method == "GET"
+        assert request.url.path == expected_path
+        assert dict(request.url.params) == expected_query
+        return httpx.Response(200, json=fixture_body)
+
+    client = client_for(appliance)
+    try:
+        result = await HANDLERS[tool_name](client, **arguments)
+    finally:
+        await client.aclose()
+
+    assert reads == 1
+    assert "discard" not in str(result)
 
 
 @pytest.mark.asyncio
