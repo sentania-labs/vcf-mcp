@@ -55,7 +55,7 @@ LOGGER = logging.getLogger(__name__)
 
 AUDIT_DB_PATH_ENV = "AUDIT_DB_PATH"
 DEFAULT_AUDIT_DB_PATH = Path("/audit/audit.sqlite3")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 5_000
 
 RECOVERY_ERROR_CODE = "attempt_unreconciled_at_recovery"
@@ -73,6 +73,11 @@ _RECORD_COLUMNS = (
     "latency_ms",
     "projection_version",
     "skill_content_digest",
+    "caller_id",
+    "endpoint_name",
+    "pack_id",
+    "pack_digest",
+    "pack_version",
 )
 
 _INSERT_SQL = (
@@ -115,15 +120,18 @@ _SCHEMA_STATEMENTS = (
         error_code TEXT,
         latency_ms INTEGER,
         projection_version TEXT,
-        skill_content_digest TEXT
+        skill_content_digest TEXT,
+        caller_id TEXT,
+        endpoint_name TEXT,
+        pack_id TEXT,
+        pack_digest TEXT,
+        pack_version TEXT
     )
     """,
     "CREATE INDEX IF NOT EXISTS audit_records_correlation_id"
     " ON audit_records (correlation_id)",
-    "CREATE INDEX IF NOT EXISTS audit_records_status"
-    " ON audit_records (status)",
-    "CREATE INDEX IF NOT EXISTS audit_records_timestamp"
-    " ON audit_records (timestamp)",
+    "CREATE INDEX IF NOT EXISTS audit_records_status ON audit_records (status)",
+    "CREATE INDEX IF NOT EXISTS audit_records_timestamp ON audit_records (timestamp)",
     """
     CREATE TABLE IF NOT EXISTS write_probe (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -212,12 +220,23 @@ class SqliteAuditRepository:
                     "INSERT INTO schema_version (version) VALUES (?)",
                     (SCHEMA_VERSION,),
                 )
+            elif existing[0] == 1:
+                for column in (
+                    "caller_id TEXT",
+                    "endpoint_name TEXT",
+                    "pack_id TEXT",
+                    "pack_digest TEXT",
+                    "pack_version TEXT",
+                ):
+                    connection.execute(f"ALTER TABLE audit_records ADD COLUMN {column}")
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
+                )
             elif existing[0] != SCHEMA_VERSION:
                 connection.execute("ROLLBACK")
                 connection.close()
                 raise AuditStorageUnavailable(
-                    "audit schema version "
-                    f"{existing[0]} is not supported by this build"
+                    f"audit schema version {existing[0]} is not supported by this build"
                 )
             connection.execute("COMMIT")
         except AuditStorageUnavailable:
@@ -273,18 +292,30 @@ class SqliteAuditRepository:
     async def unreconciled_attempts(self) -> tuple[AuditRecord, ...]:
         return await self._run(self._select_unreconciled)
 
-    async def close_unreconciled_attempts(
-        self, *, recovered_at: datetime
-    ) -> int:
+    async def close_unreconciled_attempts(self, *, recovered_at: datetime) -> int:
         return await self._run(self._close_unreconciled, recovered_at)
 
-    async def recent_records(
-        self, *, limit: int = 100
-    ) -> tuple[AuditRecord, ...]:
+    async def recent_records(self, *, limit: int = 100) -> tuple[AuditRecord, ...]:
         """Return the newest committed ledger rows for the admin UI."""
 
         bounded = max(1, min(limit, 500))
         return await self._run(self._recent_records, bounded)
+
+    async def recent_records_for_caller(
+        self,
+        *,
+        key_id: KeyId,
+        caller_id: str | None,
+        limit: int = 50,
+    ) -> tuple[AuditRecord, ...]:
+        """Return history only when both key and caller identity are known."""
+
+        if not caller_id:
+            return ()
+        bounded = max(1, min(limit, 200))
+        return await self._run(
+            self._recent_records_for_caller, key_id, caller_id, bounded
+        )
 
     # -- readiness ---------------------------------------------------------
 
@@ -337,9 +368,7 @@ class SqliteAuditRepository:
                 ) from error
         connection = self._connection
         if connection is None:
-            raise AuditStorageUnavailable(
-                f"audit store at {self._path} is unavailable"
-            )
+            raise AuditStorageUnavailable(f"audit store at {self._path} is unavailable")
         return connection
 
     def _discard_connection(self) -> None:
@@ -404,16 +433,33 @@ class SqliteAuditRepository:
         return self._reconcile(self._require_connection(), recovered_at)
 
     def _recent_records(self, limit: int) -> tuple[AuditRecord, ...]:
-        rows = self._require_connection().execute(
-            f"SELECT {', '.join(_RECORD_COLUMNS)}"
-            " FROM audit_records ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        rows = (
+            self._require_connection()
+            .execute(
+                f"SELECT {', '.join(_RECORD_COLUMNS)}"
+                " FROM audit_records ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            .fetchall()
+        )
         return tuple(_record_from_row(row) for row in rows)
 
-    def _reconcile(
-        self, connection: sqlite3.Connection, recovered_at: datetime
-    ) -> int:
+    def _recent_records_for_caller(
+        self, key_id: KeyId, caller_id: str, limit: int
+    ) -> tuple[AuditRecord, ...]:
+        rows = (
+            self._require_connection()
+            .execute(
+                f"SELECT {', '.join(_RECORD_COLUMNS)}"
+                " FROM audit_records WHERE key_id = ? AND caller_id = ?"
+                " ORDER BY id DESC LIMIT ?",
+                (str(key_id), caller_id, limit),
+            )
+            .fetchall()
+        )
+        return tuple(_record_from_row(row) for row in rows)
+
+    def _reconcile(self, connection: sqlite3.Connection, recovered_at: datetime) -> int:
         """Close every open attempt as outcome_unknown, in one transaction.
 
         Never infers a successful outcome, and never rewrites the attempt: it
@@ -442,6 +488,11 @@ class SqliteAuditRepository:
                             error_code=RECOVERY_ERROR_CODE,
                             projection_version=attempt.projection_version,
                             skill_content_digest=attempt.skill_content_digest,
+                            caller_id=attempt.caller_id,
+                            endpoint_name=attempt.endpoint_name,
+                            pack_id=attempt.pack_id,
+                            pack_digest=attempt.pack_digest,
+                            pack_version=attempt.pack_version,
                         )
                     ),
                 )
@@ -478,6 +529,11 @@ def _row_from_record(record: AuditRecord) -> tuple[Any, ...]:
         record.latency_ms,
         record.projection_version,
         record.skill_content_digest,
+        record.caller_id,
+        record.endpoint_name,
+        record.pack_id,
+        record.pack_digest,
+        record.pack_version,
     )
 
 
@@ -494,4 +550,9 @@ def _record_from_row(row: tuple[Any, ...]) -> AuditRecord:
         latency_ms=row[8],
         projection_version=row[9],
         skill_content_digest=row[10],
+        caller_id=row[11],
+        endpoint_name=row[12],
+        pack_id=row[13],
+        pack_digest=row[14],
+        pack_version=row[15],
     )

@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import dataclasses
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from vcf_ops_mcp.contracts import (
+    BackendKind,
     Capability,
+    ConfigurationGeneration,
     KeyId,
     TargetPosture,
 )
@@ -27,15 +34,31 @@ SCOPES = frozenset(
 )
 
 
+def synthetic_ca_pem() -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "fixture root")])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
 @pytest.fixture
 def repository(tmp_path: Path):
     repo = RuntimeRepository(
         tmp_path / "data" / "config.sqlite3",
         tmp_path / "keys" / "credential_keyring.json",
         grantable_scopes=SCOPES,
-        bootstrap_password_path=tmp_path
-        / "keys"
-        / "admin_bootstrap_password",
+        bootstrap_password_path=tmp_path / "keys" / "admin_bootstrap_password",
     )
     repo.bootstrap()
     yield repo
@@ -83,6 +106,178 @@ async def test_target_credentials_are_encrypted_and_survive_restart(
 
 
 @pytest.mark.asyncio
+async def test_v1_runtime_store_migrates_existing_credentials_and_key_scope(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="existing-ops",
+        fqdn="existing-ops.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    key = await repository.create_api_key(
+        label="existing-key",
+        scopes=SCOPES,
+        allowed_targets=frozenset({target.id}),
+    )
+    database_path = repository.database_path
+    keyring_path = repository.keyring_path
+    repository.close()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE targets DROP COLUMN root_ca_envelope")
+        connection.execute("ALTER TABLE targets DROP COLUMN backend")
+        connection.execute("ALTER TABLE api_keys DROP COLUMN allowed_endpoints_json")
+        connection.execute("UPDATE schema_version SET version = 1")
+        connection.commit()
+
+    migrated = RuntimeRepository(
+        database_path,
+        keyring_path,
+        grantable_scopes=SCOPES,
+    )
+    migrated.bootstrap()
+    try:
+        stored = await migrated.get(target.id)
+        credentials = await migrated.get_credentials(target.id)
+        identity = await migrated.resolve_request_identity(key)
+    finally:
+        migrated.close()
+    assert stored is not None
+    assert stored.backend is BackendKind.OPS
+    assert credentials.acquire_payload()["password"] == "synthetic-password"
+    assert identity is not None
+    assert identity.allowed_endpoints == frozenset({"ops", "vcf"})
+
+
+@pytest.mark.asyncio
+async def test_target_edit_rotates_credentials_and_ca_in_one_encrypted_store(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="old-name",
+        fqdn="old.example.internal",
+        username="synthetic-old-user",
+        password="synthetic-old-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+        backend=BackendKind.VCENTER,
+    )
+    ca_pem = synthetic_ca_pem()
+
+    updated, change = await repository.update_target(
+        target_id=target.id,
+        expected_generation=ConfigurationGeneration(1),
+        name="new-name",
+        fqdn="new.example.internal",
+        username="synthetic-new-user",
+        password="synthetic-new-password",
+        auth_source="LOCAL",
+        verify_ssl=True,
+        posture=TargetPosture.READ_ONLY,
+        root_ca_pem=ca_pem,
+    )
+
+    credentials = await repository.get_credentials(target.id)
+    stored_ca = await repository.get_root_ca(target.id)
+    raw_database = repository.database_path.read_bytes()
+    assert updated.name == "new-name"
+    assert updated.fqdn == "new.example.internal"
+    assert updated.backend is BackendKind.VCENTER
+    assert updated.verify_ssl is True
+    assert updated.has_custom_ca is True
+    assert int(change.previous_generation) == 1
+    assert int(change.current_generation) == 2
+    assert credentials.acquire_payload()["username"] == "synthetic-new-user"
+    assert credentials.acquire_payload()["password"] == "synthetic-new-password"
+    assert stored_ca == ca_pem
+    for plaintext in (
+        b"synthetic-old-user",
+        b"synthetic-old-password",
+        b"synthetic-new-user",
+        b"synthetic-new-password",
+        ca_pem.encode("ascii"),
+    ):
+        assert plaintext not in raw_database
+
+
+@pytest.mark.asyncio
+async def test_targets_default_to_unverified_tls_and_invalid_ca_is_refused(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="default-tls",
+        fqdn="default-tls.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+        backend=BackendKind.OPS,
+    )
+    assert target.verify_ssl is False
+
+    with pytest.raises(ValueError, match="valid PEM"):
+        await repository.update_target(
+            target_id=target.id,
+            expected_generation=target.configuration_generation,
+            name=target.name,
+            fqdn=target.fqdn,
+            username=None,
+            password=None,
+            auth_source=target.auth_source,
+            verify_ssl=True,
+            posture=TargetPosture.READ_ONLY,
+            root_ca_pem="not a certificate",
+        )
+
+    with pytest.raises(ValueError, match="unsigned prototype"):
+        await repository.update_target(
+            target_id=target.id,
+            expected_generation=target.configuration_generation,
+            name=target.name,
+            fqdn=target.fqdn,
+            username=None,
+            password=None,
+            auth_source=target.auth_source,
+            verify_ssl=False,
+            posture=TargetPosture.ACTIONS_ENABLED,
+        )
+
+
+@pytest.mark.asyncio
+async def test_endpoint_scopes_must_cover_each_allowed_target(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="vcenter",
+        fqdn="vcenter.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+        backend=BackendKind.VCENTER,
+    )
+    with pytest.raises(ValueError, match="every allowed target"):
+        await repository.create_api_key(
+            label="wrong endpoint",
+            scopes=SCOPES,
+            allowed_targets=frozenset({target.id}),
+            allowed_endpoints=frozenset({"ops", "vcf"}),
+        )
+
+    key = await repository.create_api_key(
+        label="vcenter endpoint",
+        scopes=SCOPES,
+        allowed_targets=frozenset({target.id}),
+        allowed_endpoints=frozenset({"vcenter", "vcf"}),
+    )
+    identity = await repository.resolve_request_identity(key)
+    assert identity is not None
+    assert identity.allowed_endpoints == frozenset({"vcenter", "vcf"})
+
+
+@pytest.mark.asyncio
 async def test_production_fqdn_is_structurally_read_only(
     repository: RuntimeRepository,
 ) -> None:
@@ -122,9 +317,7 @@ async def test_save_derives_prod_identity_from_the_normalized_fqdn(
         )
 
     renamed = dataclasses.replace(target, fqdn=" Devel2.Example.Internal. ")
-    await repository.save(
-        renamed, expected_generation=target.configuration_generation
-    )
+    await repository.save(renamed, expected_generation=target.configuration_generation)
     stored = await repository.get(target.id)
     assert stored is not None
     assert stored.fqdn == "devel2.example.internal"
@@ -174,9 +367,7 @@ async def test_bootstrap_password_file_is_consumed_once(
 
     assert await repository.initialize_admin_from_bootstrap_file() is True
     assert not path.exists()
-    assert await repository.verify_admin_password(
-        "synthetic-bootstrap-password"
-    )
+    assert await repository.verify_admin_password("synthetic-bootstrap-password")
     assert not await repository.verify_admin_password("wrong")
     assert await repository.initialize_admin_from_bootstrap_file() is False
 
@@ -200,9 +391,7 @@ async def test_bootstrap_cleanup_retries_after_unlink_failure(
 
     assert await repository.has_admin() is True
     assert path.exists()
-    assert await repository.verify_admin_password(
-        "synthetic-bootstrap-password"
-    )
+    assert await repository.verify_admin_password("synthetic-bootstrap-password")
 
     assert await repository.initialize_admin_from_bootstrap_file() is False
     assert not path.exists()
@@ -261,8 +450,7 @@ async def test_ciphertext_cannot_be_moved_between_fields(
     )
     with sqlite3.connect(repository.database_path) as connection:
         connection.execute(
-            "UPDATE targets SET password_envelope = username_envelope"
-            " WHERE id = ?",
+            "UPDATE targets SET password_envelope = username_envelope WHERE id = ?",
             (str(target.id),),
         )
         connection.commit()

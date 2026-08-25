@@ -27,6 +27,7 @@ from vcf_ops_mcp.contracts import (
     TerminalState,
     ToolContext,
     ToolSpec,
+    RequestIdentity,
     extract_request_identity,
 )
 
@@ -44,6 +45,11 @@ class DispatchDependencies:
     mutating: frozenset[CapabilityName] = MUTATING
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     reservations: FreeSpaceReservations | None = None
+    endpoint_name: str = "ops"
+    enforce_endpoint_target: bool = True
+    pack_id: str | None = None
+    pack_digest: str | None = None
+    pack_version: str | None = None
 
 
 class Dispatcher:
@@ -70,44 +76,93 @@ class Dispatcher:
         identity = extract_request_identity(context)
         correlation_id = CorrelationId(str(uuid.uuid4()))
         digest = self._arguments_digest(arguments)
+        if self._dependencies.endpoint_name not in identity.allowed_endpoints:
+            await self._deny(
+                spec,
+                correlation_id,
+                identity,
+                target_id,
+                digest,
+                "endpoint_not_allowed",
+                "API key is not allowed on this endpoint",
+            )
         if identity.revoked:
             await self._deny(
-                spec, correlation_id, identity.key_id, target_id, digest,
-                "key_revoked", "API key is revoked",
+                spec,
+                correlation_id,
+                identity,
+                target_id,
+                digest,
+                "key_revoked",
+                "API key is revoked",
             )
         if target_id not in identity.allowed_targets:
             await self._deny(
-                spec, correlation_id, identity.key_id, target_id, digest,
-                "target_not_allowed", "target is not allowed",
+                spec,
+                correlation_id,
+                identity,
+                target_id,
+                digest,
+                "target_not_allowed",
+                "target is not allowed",
             )
 
         target = await self._dependencies.targets.get(target_id)
         if target is None:
             await self._deny(
-                spec, correlation_id, identity.key_id, target_id, digest,
-                "target_not_found", "target does not exist",
+                spec,
+                correlation_id,
+                identity,
+                target_id,
+                digest,
+                "target_not_found",
+                "target does not exist",
             )
-        effective_scopes = (
-            identity.granted_scopes & self._dependencies.global_scopes
-        )
+        if (
+            self._dependencies.enforce_endpoint_target
+            and target.backend.value != self._dependencies.endpoint_name
+        ):
+            await self._deny(
+                spec,
+                correlation_id,
+                identity,
+                target_id,
+                digest,
+                "endpoint_target_mismatch",
+                "target belongs to a different backend endpoint",
+            )
+        effective_scopes = identity.granted_scopes & self._dependencies.global_scopes
         if (
             spec.capability not in effective_scopes
             or spec.key_scope not in effective_scopes
         ):
             await self._deny(
-                spec, correlation_id, identity.key_id, target_id, digest,
-                "scope_denied", "tool scope is not granted",
+                spec,
+                correlation_id,
+                identity,
+                target_id,
+                digest,
+                "scope_denied",
+                "tool scope is not granted",
             )
         if spec.capability in self._dependencies.mutating:
             if target.is_prod:
                 await self._deny(
-                    spec, correlation_id, identity.key_id, target_id, digest,
+                    spec,
+                    correlation_id,
+                    identity,
+                    target_id,
+                    digest,
                     "prod_actions_forbidden",
                     "production targets cannot execute actions",
                 )
             if target.posture is not TargetPosture.ACTIONS_ENABLED:
                 await self._deny(
-                    spec, correlation_id, identity.key_id, target_id, digest,
+                    spec,
+                    correlation_id,
+                    identity,
+                    target_id,
+                    digest,
                     "target_read_only",
                     "target does not permit actions",
                 )
@@ -121,7 +176,7 @@ class Dispatcher:
                 await self._deny(
                     spec,
                     correlation_id,
-                    identity.key_id,
+                    identity,
                     target_id,
                     digest,
                     "audit_space_exhausted",
@@ -130,7 +185,7 @@ class Dispatcher:
         attempt = self._record(
             spec,
             correlation_id,
-            identity.key_id,
+            identity,
             target_id,
             digest,
             AuditStatus.ATTEMPT,
@@ -173,7 +228,7 @@ class Dispatcher:
         terminal = self._record(
             spec,
             correlation_id,
-            identity.key_id,
+            identity,
             target_id,
             digest,
             status,
@@ -211,7 +266,7 @@ class Dispatcher:
         self,
         spec: ToolSpec,
         correlation_id: CorrelationId,
-        key_id: object,
+        identity: RequestIdentity,
         target_id: TargetId,
         digest: str,
         error_code: str,
@@ -220,7 +275,7 @@ class Dispatcher:
         denied = self._record(
             spec,
             correlation_id,
-            key_id,
+            identity,
             target_id,
             digest,
             AuditStatus.DENIED,
@@ -249,11 +304,11 @@ class Dispatcher:
             hashlib.sha256,
         ).hexdigest()
 
-    @staticmethod
     def _record(
+        self,
         spec: ToolSpec,
         correlation_id: CorrelationId,
-        key_id: object,
+        identity: RequestIdentity,
         target_id: TargetId,
         digest: str,
         status: AuditStatus,
@@ -264,7 +319,7 @@ class Dispatcher:
     ) -> AuditRecord:
         return AuditRecord(
             correlation_id=correlation_id,
-            key_id=key_id,  # type: ignore[arg-type]
+            key_id=identity.key_id,
             target_id=target_id,
             tool_name=spec.name,
             arguments_digest=digest,
@@ -273,4 +328,9 @@ class Dispatcher:
             error_code=error_code,
             latency_ms=latency_ms,
             projection_version=spec.projection,
+            caller_id=identity.caller_id,
+            endpoint_name=self._dependencies.endpoint_name,
+            pack_id=self._dependencies.pack_id,
+            pack_digest=self._dependencies.pack_digest,
+            pack_version=self._dependencies.pack_version,
         )

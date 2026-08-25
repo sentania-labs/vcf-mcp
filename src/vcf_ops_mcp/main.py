@@ -35,7 +35,7 @@ from vcf_ops_mcp.audit import (
     SqliteAuditRepository,
     audit_db_path_from_environment,
 )
-from vcf_ops_mcp.mcp_server import build_mcp_surface, implemented_scopes
+from vcf_ops_mcp.mcp_server import build_mcp_surfaces, implemented_scopes
 from vcf_ops_mcp.runtime_repository import (
     RuntimeRepository,
     admin_bootstrap_path_from_environment,
@@ -63,9 +63,7 @@ def create_production_app() -> Starlette:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    audit_repository = SqliteAuditRepository(
-        audit_db_path_from_environment()
-    )
+    audit_repository = SqliteAuditRepository(audit_db_path_from_environment())
     try:
         closed = audit_repository.bootstrap(recovered_at=datetime.now(UTC))
     except Exception:
@@ -126,8 +124,7 @@ def create_production_app() -> Starlette:
         runtime_repository.bootstrap()
     except Exception:
         LOGGER.exception(
-            "runtime configuration store could not be opened;"
-            " starting degraded"
+            "runtime configuration store could not be opened; starting degraded"
         )
         configuration_ready = False
     else:
@@ -136,9 +133,7 @@ def create_production_app() -> Starlette:
             runtime_repository.database_path,
         )
 
-    skills_path = Path(
-        os.environ.get("SKILLS_PATH", str(DEFAULT_SKILLS_PATH))
-    )
+    skills_path = Path(os.environ.get("SKILLS_PATH", str(DEFAULT_SKILLS_PATH)))
     skills = None
     try:
         skills = load_catalog(skills_path)
@@ -149,17 +144,11 @@ def create_production_app() -> Starlette:
         )
         configuration_ready = False
 
-    public_base_url = os.environ.get(
-        "PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL
-    )
-    mcp_surface = None
-    if (
-        configuration_ready
-        and skills is not None
-        and audit_digest_key is not None
-    ):
+    public_base_url = os.environ.get("PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL)
+    mcp_surfaces = None
+    if configuration_ready and skills is not None and audit_digest_key is not None:
         try:
-            mcp_surface = build_mcp_surface(
+            mcp_surfaces = build_mcp_surfaces(
                 runtime_repository=runtime_repository,
                 audit_repository=audit_repository,
                 skills=skills,
@@ -173,11 +162,9 @@ def create_production_app() -> Starlette:
         audit_repository=audit_repository,
         session_secret=session_secret,
         session_secret_persistent=session_secret_persistent,
-        runtime_repository=(
-            runtime_repository if configuration_ready else None
-        ),
-        mcp_surface=mcp_surface,
+        runtime_repository=(runtime_repository if configuration_ready else None),
+        mcp_surfaces=mcp_surfaces,
         configuration_ready=configuration_ready,
-        mcp_ready=mcp_surface is not None,
+        mcp_ready=mcp_surfaces is not None,
         session_https_only=public_base_url.lower().startswith("https://"),
     )

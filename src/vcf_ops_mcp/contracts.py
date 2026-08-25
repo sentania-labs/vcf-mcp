@@ -44,6 +44,13 @@ class TargetPosture(StrEnum):
     ACTIONS_ENABLED = "actions_enabled"
 
 
+class BackendKind(StrEnum):
+    """Static backend families available in the prototype."""
+
+    OPS = "ops"
+    VCENTER = "vcenter"
+
+
 @dataclass(frozen=True, slots=True)
 class TargetRecord:
     """Public target configuration, excluding every credential and token."""
@@ -56,6 +63,8 @@ class TargetRecord:
     verify_ssl: bool
     auth_source: str
     configuration_generation: ConfigurationGeneration
+    backend: BackendKind = BackendKind.OPS
+    has_custom_ca: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +75,8 @@ class RequestIdentity:
     granted_scopes: frozenset[CapabilityName]
     allowed_targets: frozenset[TargetId]
     revoked: bool = False
+    allowed_endpoints: frozenset[str] = frozenset({BackendKind.OPS.value})
+    caller_id: str | None = None
 
 
 @runtime_checkable
@@ -191,9 +202,7 @@ class ResponseEnvelope:
             if self.retryable:
                 raise ValueError("outcome_unknown prohibits automatic retry")
         elif self.outcome_unknown_payload is not NO_PAYLOAD:
-            raise ValueError(
-                "outcome_unknown_payload requires outcome_unknown state"
-            )
+            raise ValueError("outcome_unknown_payload requires outcome_unknown state")
 
 
 class AuditStatus(StrEnum):
@@ -219,6 +228,11 @@ class AuditRecord:
     latency_ms: int | None = None
     projection_version: str | None = None
     skill_content_digest: str | None = None
+    caller_id: str | None = None
+    endpoint_name: str | None = None
+    pack_id: str | None = None
+    pack_digest: str | None = None
+    pack_version: str | None = None
 
 
 class IdentityDeny(Exception):
@@ -269,9 +283,7 @@ class AuditRepository(Protocol):
 
     async def unreconciled_attempts(self) -> tuple[AuditRecord, ...]: ...
 
-    async def close_unreconciled_attempts(
-        self, *, recovered_at: datetime
-    ) -> int: ...
+    async def close_unreconciled_attempts(self, *, recovered_at: datetime) -> int: ...
 
 
 class ApiKeyScopeRepository(Protocol):
