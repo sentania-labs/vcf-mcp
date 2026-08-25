@@ -320,11 +320,12 @@ class PackTrustManager:
         if not current.exists():
             return
         bundle = current.with_suffix(".sigstore.json")
-        if bundle.exists():
-            self._verify_signature(current, bundle)
-        else:
-            self._refuse_unsigned_if_unsafe()
-        pack = self._load_one(current)
+        try:
+            if bundle.exists():
+                self._verify_signature(current, bundle)
+            pack = self._load_one(current)
+        except PackTrustError:
+            return
         destination_dir = self.retained_path / backend.value
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / f"{_safe_version(pack.version)}.json"

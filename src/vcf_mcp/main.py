@@ -153,6 +153,7 @@ def create_production_app() -> Starlette:
         )
 
     pack_trust_manager = None
+    pack_trust_ready = configuration_ready
     if configuration_ready:
         try:
             pack_trust_manager = PackTrustManager(runtime_repository)
@@ -169,9 +170,18 @@ def create_production_app() -> Starlette:
             )
         except Exception:
             LOGGER.exception(
-                "active backend pack trust verification failed; starting degraded"
+                "active backend pack trust verification failed; the MCP"
+                " surface is withheld until the operator resolves it in the"
+                " admin UI"
             )
-            configuration_ready = False
+            pack_trust_ready = False
+            try:
+                runtime_repository.set_pack_action_trust_at_startup(False)
+            except Exception:
+                LOGGER.exception(
+                    "could not record refused pack action trust; actions stay"
+                    " unavailable because the MCP surface is withheld"
+                )
 
     skills_path = Path(os.environ.get("SKILLS_PATH", str(DEFAULT_SKILLS_PATH)))
     skills = None
@@ -186,7 +196,12 @@ def create_production_app() -> Starlette:
 
     public_base_url = os.environ.get("PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     mcp_surfaces = None
-    if configuration_ready and skills is not None and audit_digest_key is not None:
+    if (
+        configuration_ready
+        and pack_trust_ready
+        and skills is not None
+        and audit_digest_key is not None
+    ):
         try:
             mcp_surfaces = build_mcp_surfaces(
                 runtime_repository=runtime_repository,

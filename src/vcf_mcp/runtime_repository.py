@@ -1429,11 +1429,24 @@ class RuntimeRepository:
                 selected_targets = frozenset(TargetId(row[0]) for row in target_rows)
                 scopes = self._grantable_scopes
             elif not selected_targets:
-                selected_targets = frozenset(
-                    TargetId(row[0])
-                    for row in connection.execute(
+                selected_backends = sorted(
+                    endpoints & frozenset(kind.value for kind in BackendKind)
+                )
+                if endpoints and selected_backends:
+                    backend_marks = ",".join("?" for _ in selected_backends)
+                    default_rows = connection.execute(
+                        "SELECT id FROM targets WHERE unusable_reason IS NULL"
+                        f" AND backend IN ({backend_marks})",
+                        tuple(selected_backends),
+                    ).fetchall()
+                elif endpoints:
+                    default_rows = []
+                else:
+                    default_rows = connection.execute(
                         "SELECT id FROM targets WHERE unusable_reason IS NULL"
                     ).fetchall()
+                selected_targets = frozenset(
+                    TargetId(row[0]) for row in default_rows
                 )
             if not selected_targets:
                 raise ValueError("at least one usable target must be allowed")

@@ -114,7 +114,9 @@ async def post_login(request: Request):
         confirmation = str(form.get("password_confirmation", ""))
         if not secrets.compare_digest(
             username.encode("utf-8"), b"admin"
-        ) or not secrets.compare_digest(password, confirmation):
+        ) or not secrets.compare_digest(
+            password.encode("utf-8"), confirmation.encode("utf-8")
+        ):
             return templates.TemplateResponse(
                 request,
                 "login.html",
