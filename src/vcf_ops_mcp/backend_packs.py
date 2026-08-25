@@ -48,6 +48,18 @@ BUILTIN_BACKENDS = frozenset(
     }
 )
 MINIMUM_TOOL_COUNT = 19
+SUPPORTED_ARGUMENT_TYPES = frozenset(
+    {
+        "str",
+        "str?",
+        "int",
+        "int?",
+        "bool",
+        "bool?",
+        "list[str]",
+        "list[str]?",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,13 +211,16 @@ def _tool_from_document(
     parsed_arguments: list[PackArgument] = []
     for argument in document.get("arguments", []):
         wire_name = str(argument.get("wire_name", argument["name"]))
+        argument_type = str(argument["type"])
+        if argument_type not in SUPPORTED_ARGUMENT_TYPES:
+            raise ValueError(f"unsupported argument type {argument_type!r} in pack")
         default_location = (
             "path" if "{" + wire_name + "}" in path else "argument"
         )
         parsed_arguments.append(
             PackArgument(
                 name=str(argument["name"]),
-                type=str(argument["type"]),
+                type=argument_type,
                 required=bool(argument.get("required", False)),
                 default=argument.get("default"),
                 description=str(argument.get("description", "")),

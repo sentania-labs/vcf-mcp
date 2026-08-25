@@ -204,6 +204,64 @@ async def test_log_exchange_and_nested_body_template_are_fixture_proven() -> Non
 
 
 @pytest.mark.asyncio
+async def test_log_agent_secret_values_never_enter_the_projected_result() -> None:
+    pack = load_backend_packs()[BackendKind.LOG_MANAGEMENT]
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token/acquire"):
+            return httpx.Response(200, json={"token": "ops-token"})
+        if request.url.path.endswith("/token/exchange"):
+            return httpx.Response(200, json={"accessToken": "log-token"})
+        assert request.url.path == "/api/v2/agent/secrets"
+        return httpx.Response(
+            200,
+            json={
+                "id": "secret-1",
+                "name": "fixture agent secret",
+                "status": "ACTIVE",
+                "value": "must-not-pass",
+                "password": "must-not-pass",
+                "token": "must-not-pass",
+                "items": [
+                    {
+                        "id": "secret-2",
+                        "name": "nested fixture agent secret",
+                        "value": "must-not-pass",
+                    }
+                ],
+            },
+        )
+
+    client = DeclaredBackendClient(
+        target=target(BackendKind.LOG_MANAGEMENT),
+        credentials=TargetCredentials("synthetic-user", "synthetic-password"),
+        pack=pack,
+        http_client=httpx.AsyncClient(
+            base_url="https://logs.example.internal",
+            transport=httpx.MockTransport(appliance),
+        ),
+    )
+    try:
+        result = await client.request_declared(
+            "list_log_agent_secrets", {"pageable": None}
+        )
+    finally:
+        await client.aclose()
+
+    assert result == {
+        "id": "secret-1",
+        "name": "fixture agent secret",
+        "status": "ACTIVE",
+        "items": [
+            {
+                "id": "secret-2",
+                "name": "nested fixture agent secret",
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("backend", "tool_name", "read_path", "acquires_token"),
     [
@@ -228,11 +286,16 @@ async def test_static_and_ops_acquired_bearer_shapes_are_fixture_proven(
     acquires_token: bool,
 ) -> None:
     pack = load_backend_packs()[backend]
+    released_tokens: list[str] = []
 
     async def appliance(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/token/acquire"):
             assert acquires_token
             return httpx.Response(200, json={"token": "acquired-token"})
+        if request.url.path.endswith("/token/release"):
+            assert acquires_token
+            released_tokens.append(request.headers["authorization"])
+            return httpx.Response(200)
         assert request.url.path == read_path
         expected = "acquired-token" if acquires_token else "synthetic-password"
         assert request.headers["authorization"] == f"Bearer {expected}"
@@ -253,6 +316,46 @@ async def test_static_and_ops_acquired_bearer_shapes_are_fixture_proven(
         await client.aclose()
 
     assert result == {"status": "UP", "version": "9.1"}
+    assert released_tokens == (["OpsToken acquired-token"] if acquires_token else [])
+
+
+@pytest.mark.asyncio
+async def test_ops_bearer_releases_rejected_and_shutdown_tokens() -> None:
+    pack = load_backend_packs()[BackendKind.OPS_NETWORKS]
+    acquisitions = 0
+    reads = 0
+    released_tokens: list[str] = []
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        nonlocal acquisitions, reads
+        if request.url.path.endswith("/token/acquire"):
+            acquisitions += 1
+            return httpx.Response(200, json={"token": f"ops-token-{acquisitions}"})
+        if request.url.path.endswith("/token/release"):
+            released_tokens.append(request.headers["authorization"])
+            return httpx.Response(200)
+        assert request.url.path == "/api/ni/info/version"
+        reads += 1
+        if reads == 1:
+            return httpx.Response(401, json={"error": "synthetic expiry"})
+        return httpx.Response(200, json={"version": "9.1"})
+
+    client = DeclaredBackendClient(
+        target=target(BackendKind.OPS_NETWORKS),
+        credentials=TargetCredentials("synthetic-user", "synthetic-password"),
+        pack=pack,
+        http_client=httpx.AsyncClient(
+            base_url="https://ops-networks.example.internal",
+            transport=httpx.MockTransport(appliance),
+        ),
+    )
+    result = await client.request_declared("get_networks_version", {})
+    await client.aclose()
+
+    assert result == {"version": "9.1"}
+    assert acquisitions == 2
+    assert reads == 2
+    assert released_tokens == ["OpsToken ops-token-1", "OpsToken ops-token-2"]
 
 
 @pytest.mark.asyncio

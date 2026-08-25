@@ -16,7 +16,11 @@ from vcf_ops_mcp.contracts import (
     TargetRecord,
 )
 from vcf_ops_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
-from vcf_ops_mcp.vcf.client import TargetCredentials, build_tls_verifier
+from vcf_ops_mcp.vcf.client import (
+    TOKEN_RELEASE_TIMEOUT,
+    TargetCredentials,
+    build_tls_verifier,
+)
 from vcf_ops_mcp.vcf.errors import (
     AuthenticationError,
     PermissionDeniedError,
@@ -33,6 +37,7 @@ from vcf_ops_mcp.vcf.outbound import _SAFE_PATH_VALUE
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=10)
 DEFAULT_MAX_LIST_ITEMS = 4_000
 MAX_REAUTHENTICATIONS_PER_REQUEST = 1
+OPS_TOKEN_RELEASE_PATH = "/suite-api/api/auth/token/release"
 
 
 class DeclaredBackendClient:
@@ -181,7 +186,25 @@ class DeclaredBackendClient:
         async with self._auth_lock:
             if self._auth_generation != observed_generation:
                 return
+            previous = self._auth_value
+            self._auth_value = None
+            if previous and self._pack.auth_scheme == "ops_bearer":
+                await self._release_ops_bearer(previous)
             await self._acquire_locked()
+
+    async def _release_ops_bearer(self, token: str) -> None:
+        try:
+            await self._http.post(
+                OPS_TOKEN_RELEASE_PATH,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"OpsToken {token}",
+                },
+                timeout=TOKEN_RELEASE_TIMEOUT,
+            )
+        except httpx.HTTPError:
+            pass
 
     async def _acquire_locked(self) -> None:
         scheme = self._pack.auth_scheme
@@ -334,6 +357,11 @@ class DeclaredBackendClient:
                     "/api/session", headers={"vmware-api-session-id": session}
                 )
             except httpx.HTTPError:
+                pass
+        elif session and self._pack.auth_scheme == "ops_bearer":
+            try:
+                await self._release_ops_bearer(session)
+            except asyncio.CancelledError:
                 pass
         await self._http.aclose()
 

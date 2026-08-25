@@ -43,6 +43,32 @@ VCENTER_CONTRACTS = {
     "get_vcenter_session": ("/api/session", set()),
 }
 
+SENSITIVE_RESPONSE_TOOLS = {
+    BackendKind.LOG_MANAGEMENT: {
+        "list_log_agent_secrets": {"value", "secret", "password", "token"},
+    },
+    BackendKind.FLEET_LCM: {
+        "get_fleet_component_config": {"password"},
+    },
+    BackendKind.SDDC_LCM: {
+        "get_sddc_lcm_component_config": {"password"},
+    },
+    BackendKind.OPS_NETWORKS: {
+        "get_networks_vcenter": {"credentials", "password"},
+        "get_networks_nsx_manager": {
+            "credentials",
+            "password",
+            "client_private_key",
+        },
+    },
+    BackendKind.VCENTER: {
+        "get_vcenter_content_library": {
+            "password",
+            "current_password",
+        },
+    },
+}
+
 
 def test_remaining_official_backends_ship_as_nineteen_tool_packs() -> None:
     packs = load_backend_packs()
@@ -110,6 +136,33 @@ def test_operator_pack_cannot_compress_below_nineteen_tools(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="at least 19 tools"):
         load_backend_packs(operator_path=operator_path)
+
+
+def test_operator_pack_rejects_unsupported_argument_types_at_load(
+    tmp_path: Path,
+) -> None:
+    operator_path = tmp_path / "operator-packs"
+    operator_path.mkdir()
+    document = _operator_pack(BackendKind.AUTOMATION)
+    document["tools"][0]["arguments"] = [
+        {"name": "mistyped", "type": "string", "default": None}
+    ]
+    (operator_path / "automation.json").write_text(json.dumps(document))
+
+    with pytest.raises(ValueError, match="unsupported argument type 'string'"):
+        load_backend_packs(operator_path=operator_path)
+
+
+def test_sensitive_response_tools_have_narrow_tool_specific_allowlists() -> None:
+    packs = load_backend_packs()
+
+    for backend, tool_fields in SENSITIVE_RESPONSE_TOOLS.items():
+        pack = packs[backend]
+        tools = {tool.name: tool for tool in pack.tools}
+        for tool_name, sensitive_fields in tool_fields.items():
+            response_keys = tools[tool_name].response_keys
+            assert response_keys != pack.projection_keys
+            assert response_keys.isdisjoint(sensitive_fields)
 
 
 def test_every_builtin_file_is_consumed_by_the_validated_loader() -> None:

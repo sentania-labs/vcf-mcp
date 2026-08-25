@@ -85,6 +85,29 @@ restoration of the appliance field casing in both vCenter projections and
 fixtures, restoration of the published `standalone` host filter with the
 uncited UUID fields removed, and correction of the NSX segment placeholder.
 
+## External review response
+
+The one external Codex review round found three accepted defects. The response
+stays in this PR and does not add another review round:
+
+- Log Management agent-secret metadata now has a tool-specific response
+  allowlist that excludes `value` and other credential fields.
+- Operator pack argument types are rejected during pack loading unless they
+  use the same supported vocabulary as MCP surface composition.
+- Operations bearer tokens are released best effort during 401 reacquisition
+  and client close, which covers target replacement and process shutdown.
+
+The response-schema audit covered the other eight built-in packs against their
+official specifications and static handlers. Fleet Lifecycle component config,
+SDDC Lifecycle component config, and Operations for Networks vCenter and NSX
+Manager data-source detail can contain password, credentials, or private-key
+fields upstream. Their existing shared projections excluded those field names,
+and this response gives each tool a narrower tool-specific allowlist to prevent
+future shared-allowlist drift. vCenter content-library detail can contain
+password fields upstream and already had a tool-specific allowlist that omits
+them. No matching sensitive response fields were found for NSX, SDDC Manager,
+vSAN Data Protection, or the static VCF Operations response projections.
+
 ## Protected paths touched
 
 `src/vcf_ops_mcp/`

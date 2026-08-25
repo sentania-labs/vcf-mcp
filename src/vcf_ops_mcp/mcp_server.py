@@ -27,6 +27,7 @@ from vcf_ops_mcp.backend_packs import (
     DEFAULT_OPERATOR_PACKS_PATH,
     PackArgument,
     PackTool,
+    SUPPORTED_ARGUMENT_TYPES,
     load_backend_packs,
 )
 from vcf_ops_mcp.declared_backend import DeclaredBackendClient
@@ -863,6 +864,7 @@ def _argument_type(argument: PackArgument) -> object:
         "list[str]": list[str],
         "list[str]?": list[str] | None,
     }
+    assert set(types) == SUPPORTED_ARGUMENT_TYPES
     try:
         return types[argument.type]
     except KeyError as exc:
