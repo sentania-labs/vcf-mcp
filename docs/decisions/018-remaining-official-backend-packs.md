@@ -56,6 +56,16 @@ projection allowlists, and operator-pack merging. Real appliance base paths,
 authentication exchanges, permissions, and response shapes remain a lab gate
 and are not claimed by this record.
 
+## Constitution alignment
+
+The overview paragraph of `CLAUDE.md` (and its generated copy `AGENTS.md`)
+was aligned with this decision: product endpoints are derived at startup
+from registered backends, any endpoint names in the overview are examples
+rather than a fixed or exhaustive list, and `README.md` owns the current
+per-product list. Firstmate approved this factual constitution alignment.
+It is a documentation alignment only, not a captain or principal directive,
+and it changes no rule or invariant.
+
 ## Protected paths touched
 
 `src/vcf_ops_mcp/`
