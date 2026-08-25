@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from string import Formatter
 
-from vcf_ops_mcp.contracts import BackendKind, CapabilityName, HttpMethod
+from vcf_ops_mcp.contracts import (
+    BackendKind,
+    Capability,
+    CapabilityName,
+    HttpMethod,
+)
 
 
 DEFAULT_PACKS_PATH = Path(__file__).with_name("packs")
@@ -219,6 +224,9 @@ def _tool_from_document(
     locations = {argument.location for argument in arguments}
     if not locations.issubset({"argument", "path", "query", "body"}):
         raise ValueError("tool argument locations are invalid")
+    for argument in arguments:
+        if argument.location == "path" and not argument.required:
+            raise ValueError("path arguments must be required")
     expected_path_names = {
         field_name
         for _, field_name, _, _ in Formatter().parse(path)
@@ -268,7 +276,7 @@ def _tool_from_document(
     return PackTool(
         name=str(document["name"]),
         summary=str(document["summary"]),
-        capability=str(document["capability"]),
+        capability=Capability(str(document["capability"])),
         method=HttpMethod(str(document["method"])),
         path=path,
         query=query,

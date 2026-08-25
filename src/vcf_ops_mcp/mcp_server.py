@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import re
 import shutil
 from collections.abc import Callable, Mapping
@@ -59,6 +60,8 @@ from vcf_ops_mcp.vcf.adapters import ADAPTERS_BY_TOOL_NAME, READ_ADAPTERS
 from vcf_ops_mcp.vcf.client import TargetCredentials, VcfTargetClient
 from vcf_ops_mcp.vcf.outbound import OutboundAllowlist
 
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TOOL_DEADLINE_SECONDS = 75.0
 CALLER_HEADER = "x-vcf-caller-id"
@@ -286,9 +289,16 @@ def build_mcp_surfaces(
         else load_backend_packs(operator_path=operator_pack_path)
     )
     targets = runtime_repository.list_at_startup()
-    wired = frozenset(target.backend for target in targets)
+    registered = frozenset(target.backend for target in targets)
+    wired = frozenset(backend for backend in registered if backend in loaded_packs)
     pools: list[BackendClientPool] = []
     surfaces: dict[str, McpSurface] = {}
+    for backend in sorted(registered - wired, key=lambda value: value.value):
+        LOGGER.warning(
+            "registered backend %s has no loaded pack; its endpoint is"
+            " not served until a pack for it is installed",
+            backend.value,
+        )
     for backend in sorted(wired, key=lambda value: value.value):
         pack = loaded_packs[backend]
         pool = BackendClientPool(
@@ -643,7 +653,7 @@ def _build_management_surface(
 def implemented_scopes(
     packs: Mapping[BackendKind, BackendPack] | None = None,
 ) -> frozenset[CapabilityName]:
-    loaded_packs = packs or load_backend_packs()
+    loaded_packs = packs if packs is not None else load_backend_packs()
     return frozenset(
         {
             *(adapter.capability for adapter in READ_ADAPTERS),

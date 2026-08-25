@@ -361,11 +361,13 @@ async def _dashboard_response(
     wired_endpoints = (
         frozenset(surfaces.by_endpoint) if surfaces is not None else frozenset({"vcf"})
     )
-    packs = (
-        surfaces.packs
-        if surfaces is not None
-        else load_backend_packs()
-    )
+    if surfaces is not None:
+        packs = surfaces.packs
+    else:
+        try:
+            packs = load_backend_packs()
+        except Exception:
+            packs = {}
     backend_packs = tuple(
         sorted(packs.values(), key=lambda pack: pack.product.casefold())
     )

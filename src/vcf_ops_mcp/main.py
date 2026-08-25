@@ -128,7 +128,7 @@ def create_production_app() -> Starlette:
     runtime_repository = RuntimeRepository(
         config_db_path_from_environment(),
         credential_keyring_path_from_environment(),
-        grantable_scopes=implemented_scopes(packs),
+        grantable_scopes=implemented_scopes(packs if packs is not None else {}),
         bootstrap_password_path=admin_bootstrap_path_from_environment(),
     )
     configuration_ready = pack_configuration_ready
