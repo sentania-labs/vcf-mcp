@@ -79,6 +79,44 @@ async def test_basic_pack_renders_only_declared_path_query_and_projection() -> N
 
 
 @pytest.mark.asyncio
+async def test_gzip_compressed_upstream_response_decodes_once() -> None:
+    import gzip
+    import json
+
+    pack = load_backend_packs()[BackendKind.NSX]
+    payload = {"results": [{"id": "segment-1"}], "result_count": 1}
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=gzip.compress(json.dumps(payload).encode()),
+            headers={
+                "content-encoding": "gzip",
+                "content-type": "application/json",
+            },
+        )
+
+    client = DeclaredBackendClient(
+        target=target(BackendKind.NSX),
+        credentials=TargetCredentials("synthetic-user", "synthetic-password"),
+        pack=pack,
+        http_client=httpx.AsyncClient(
+            base_url="https://nsx.example.internal",
+            transport=httpx.MockTransport(appliance),
+        ),
+    )
+    try:
+        result = await client.request_declared(
+            "list_nsx_segments",
+            {"cursor": None, "page_size": None},
+        )
+    finally:
+        await client.aclose()
+
+    assert result == payload
+
+
+@pytest.mark.asyncio
 async def test_sddc_token_reauthentication_is_bounded_to_one_retry() -> None:
     pack = load_backend_packs()[BackendKind.SDDC_MANAGER]
     token_count = 0

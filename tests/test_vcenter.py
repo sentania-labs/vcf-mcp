@@ -86,7 +86,7 @@ class CountingStream(httpx.AsyncByteStream):
 VCENTER_HANDLER_FIXTURES = (
     ("list_vcenter_vms", {"vms": ["vm-1"], "names": ["vm"], "folders": ["folder-1"], "datacenters": ["dc-1"], "hosts": ["host-1"], "clusters": ["cluster-1"], "resource_pools": ["resgroup-1"], "power_states": ["POWERED_ON"]}, "/api/vcenter/vm", {"vms": "vm-1", "names": "vm", "folders": "folder-1", "datacenters": "dc-1", "hosts": "host-1", "clusters": "cluster-1", "resource_pools": "resgroup-1", "power_states": "POWERED_ON"}, [{"vm": "vm-1", "name": "fixture", "hidden": "discard"}]),
     ("get_vcenter_vm", {"vm": "vm-1"}, "/api/vcenter/vm/vm-1", {}, {"name": "fixture", "hidden": "discard"}),
-    ("list_vcenter_hosts", {"hosts": ["host-1"], "names": ["esx"], "folders": ["folder-1"], "datacenters": ["dc-1"], "clusters": ["cluster-1"], "connection_states": ["CONNECTED"], "host_uuids": ["uuid-1"]}, "/api/vcenter/host", {"hosts": "host-1", "names": "esx", "folders": "folder-1", "datacenters": "dc-1", "clusters": "cluster-1", "connection_states": "CONNECTED", "host_uuids": "uuid-1"}, [{"host": "host-1", "hidden": "discard"}]),
+    ("list_vcenter_hosts", {"hosts": ["host-1"], "names": ["esx"], "folders": ["folder-1"], "datacenters": ["dc-1"], "clusters": ["cluster-1"], "connection_states": ["CONNECTED"], "standalone": True}, "/api/vcenter/host", {"hosts": "host-1", "names": "esx", "folders": "folder-1", "datacenters": "dc-1", "clusters": "cluster-1", "connection_states": "CONNECTED", "standalone": "true"}, [{"host": "host-1", "hidden": "discard"}]),
     ("list_vcenter_clusters", {"clusters": ["cluster-1"], "names": ["cluster"], "folders": ["folder-1"], "datacenters": ["dc-1"]}, "/api/vcenter/cluster", {"clusters": "cluster-1", "names": "cluster", "folders": "folder-1", "datacenters": "dc-1"}, [{"cluster": "cluster-1", "hidden": "discard"}]),
     ("get_vcenter_cluster", {"cluster": "cluster-1"}, "/api/vcenter/cluster/cluster-1", {}, {"name": "fixture", "hidden": "discard"}),
     ("list_vcenter_datacenters", {"datacenters": ["dc-1"], "names": ["dc"], "folders": ["folder-1"]}, "/api/vcenter/datacenter", {"datacenters": "dc-1", "names": "dc", "folders": "folder-1"}, [{"datacenter": "dc-1", "hidden": "discard"}]),
@@ -163,7 +163,7 @@ async def test_vcenter_uses_basic_session_then_projects_inventory() -> None:
                     "name": "fixture-vm",
                     "power_state": "POWERED_ON",
                     "cpu_count": 4,
-                    "memory_size_mib": 8192,
+                    "memory_size_MiB": 8192,
                     "not_in_projection": "hidden",
                 }
             ],
@@ -182,7 +182,7 @@ async def test_vcenter_uses_basic_session_then_projects_inventory() -> None:
         "name": "fixture-vm",
         "power_state": "POWERED_ON",
         "cpu_count": 4,
-        "memory_size_mib": 8192,
+        "memory_size_MiB": 8192,
     }
 
 

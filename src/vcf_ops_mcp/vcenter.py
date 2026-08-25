@@ -304,7 +304,7 @@ async def list_vcenter_vms(
             "resource_pools": resource_pools,
             "power_states": power_states,
         },
-        allowed=("vm", "name", "power_state", "cpu_count", "memory_size_mib"),
+        allowed=("vm", "name", "power_state", "cpu_count", "memory_size_MiB"),
         label="VM",
     )
 
@@ -316,7 +316,7 @@ async def get_vcenter_vm(client: VcenterTargetClient, *, vm: str) -> dict[str, o
         path_parameters={"vm": vm},
         allowed=(
             "name",
-            "guest_os",
+            "guest_OS",
             "identity",
             "power_state",
             "hardware",
@@ -337,7 +337,7 @@ async def list_vcenter_hosts(
     datacenters: Sequence[str] | None = None,
     clusters: Sequence[str] | None = None,
     connection_states: Sequence[str] | None = None,
-    host_uuids: Sequence[str] | None = None,
+    standalone: bool | None = None,
 ) -> dict[str, object]:
     return await _list_projected(
         client,
@@ -349,9 +349,9 @@ async def list_vcenter_hosts(
             "datacenters": datacenters,
             "clusters": clusters,
             "connection_states": connection_states,
-            "host_uuids": host_uuids,
+            "standalone": standalone,
         },
-        allowed=("host", "name", "connection_state", "power_state", "host_uuid"),
+        allowed=("host", "name", "connection_state", "power_state"),
         label="host",
     )
 

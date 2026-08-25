@@ -290,9 +290,12 @@ class DeclaredBackendClient:
                     )
         finally:
             await response.aclose()
+        rebuilt_headers = httpx.Headers(response.headers)
+        rebuilt_headers.pop("content-length", None)
+        rebuilt_headers.pop("content-encoding", None)
         return httpx.Response(
             status_code=response.status_code,
-            headers=response.headers,
+            headers=rebuilt_headers,
             content=bytes(buffered),
             request=request,
         )

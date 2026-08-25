@@ -24,7 +24,7 @@ REMAINING_OFFICIAL = frozenset(
 VCENTER_CONTRACTS = {
     "list_vcenter_vms": ("/api/vcenter/vm", {"vms", "names", "folders", "datacenters", "hosts", "clusters", "resource_pools", "power_states"}),
     "get_vcenter_vm": ("/api/vcenter/vm/{vm}", set()),
-    "list_vcenter_hosts": ("/api/vcenter/host", {"hosts", "names", "folders", "datacenters", "clusters", "connection_states", "host_uuids"}),
+    "list_vcenter_hosts": ("/api/vcenter/host", {"hosts", "names", "folders", "datacenters", "clusters", "connection_states", "standalone"}),
     "list_vcenter_clusters": ("/api/vcenter/cluster", {"clusters", "names", "folders", "datacenters"}),
     "get_vcenter_cluster": ("/api/vcenter/cluster/{cluster}", set()),
     "list_vcenter_datacenters": ("/api/vcenter/datacenter", {"datacenters", "names", "folders"}),
