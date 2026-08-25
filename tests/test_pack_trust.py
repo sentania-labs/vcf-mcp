@@ -10,6 +10,7 @@ import pytest
 from vcf_mcp.backend_packs import DEFAULT_PACKS_PATH, load_backend_packs
 from vcf_mcp.contracts import BackendKind, Capability, TargetPosture
 from vcf_mcp.pack_trust import (
+    MAX_PACK_BYTES,
     OCI_MANIFEST_MEDIA_TYPE,
     PACK_ARTIFACT_TYPE,
     PACK_CERTIFICATE_IDENTITY,
@@ -18,6 +19,7 @@ from vcf_mcp.pack_trust import (
     PACK_REGISTRY_REFERENCE,
     PackTrustError,
     PackTrustManager,
+    _read_registry_bytes,
     _sha256_digest,
 )
 from vcf_mcp.runtime_repository import RuntimeRepository
@@ -285,7 +287,7 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cosign, _ = _fake_cosign(tmp_path, monkeypatch)
+    cosign, arguments_path = _fake_cosign(tmp_path, monkeypatch)
     manager = _manager(repository, tmp_path, cosign)
     pack_bytes = (DEFAULT_PACKS_PATH / "ops-networks.json").read_bytes()
     pack = manager._load_bytes(pack_bytes)
@@ -307,48 +309,47 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
     manifest_digest = _sha256_digest(manifest_bytes)
     tag = f"pack-{pack.backend.value}-{pack.version}"
 
-    class FixtureClient:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
+    redirected_headers: httpx.Headers | None = None
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def get(self, url: str, **_kwargs: object) -> httpx.Response:
-            request = httpx.Request("GET", url)
-            if url.startswith("https://ghcr.io/token"):
-                return httpx.Response(200, json={"token": "anonymous"}, request=request)
-            if "/tags/list" in url:
-                if "last=" in url:
-                    return httpx.Response(
-                        200,
-                        json={"tags": [tag, "v0.2.0"]},
-                        request=request,
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal redirected_headers
+        url = str(request.url)
+        if url.startswith("https://ghcr.io/token"):
+            return httpx.Response(200, json={"token": "anonymous"})
+        if "/tags/list" in url:
+            if "last=" in url:
+                return httpx.Response(200, json={"tags": [tag, "v0.2.0"]})
+            return httpx.Response(
+                200,
+                json={"tags": ["pack-proof-ignored"]},
+                headers={
+                    "Link": (
+                        "</v2/sentania-labs/vcf-mcp/tags/list"
+                        '?last=pack-proof-ignored&n=1000>; rel="next"'
                     )
-                return httpx.Response(
-                    200,
-                    json={"tags": ["pack-proof-ignored"]},
-                    headers={
-                        "Link": (
-                            "</v2/sentania-labs/vcf-mcp/tags/list"
-                            '?last=pack-proof-ignored&n=1000>; rel="next"'
-                        )
-                    },
-                    request=request,
-                )
-            if "/manifests/" in url:
-                return httpx.Response(
-                    200,
-                    content=manifest_bytes,
-                    headers={"Docker-Content-Digest": manifest_digest},
-                    request=request,
-                )
-            return httpx.Response(200, content=pack_bytes, request=request)
+                },
+            )
+        if "/manifests/" in url:
+            return httpx.Response(
+                200,
+                content=manifest_bytes,
+                headers={"Docker-Content-Digest": manifest_digest},
+            )
+        if request.url.host == "ghcr.io" and "/blobs/" in url:
+            return httpx.Response(
+                307,
+                headers={"Location": "https://objects.example/pack.json"},
+            )
+        redirected_headers = request.headers
+        return httpx.Response(200, content=pack_bytes)
 
-    monkeypatch.setattr(httpx, "AsyncClient", FixtureClient)
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def fixture_client(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", fixture_client)
 
     entries = await manager.registry_catalog()
 
@@ -356,6 +357,55 @@ async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
     assert entries[0]["id"] == f"{pack.backend.value}:{pack.version}"
     assert entries[0]["manifest_digest"] == manifest_digest
     assert entries[0]["tool_count"] == len(pack.tools)
+    assert entries[0]["blob_redirects"] == 1
+    assert redirected_headers is not None
+    assert "Authorization" not in redirected_headers
+    arguments = arguments_path.read_text().splitlines()
+    assert arguments[0] == "verify"
+    assert arguments[arguments.index("--certificate-identity") + 1] == (
+        PACK_CERTIFICATE_IDENTITY
+    )
+    assert arguments[-1] == (
+        f"{PACK_REGISTRY_REFERENCE}:{tag}@{manifest_digest}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_registry_redirect_refuses_downgrade_before_request() -> None:
+    visited: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        visited.append(str(request.url))
+        return httpx.Response(
+            307,
+            headers={"Location": "http://objects.example/pack.json"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(PackTrustError, match="non-HTTPS"):
+            await _read_registry_bytes(
+                client,
+                "https://ghcr.io/v2/example/blobs/sha256:fixture",
+                max_bytes=MAX_PACK_BYTES,
+                description="registry pack",
+            )
+
+    assert visited == ["https://ghcr.io/v2/example/blobs/sha256:fixture"]
+
+
+@pytest.mark.asyncio
+async def test_registry_read_limits_actual_redirected_bytes() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"oversized")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(PackTrustError, match="exceeds the size limit"):
+            await _read_registry_bytes(
+                client,
+                "https://objects.example/pack.json",
+                max_bytes=4,
+                description="registry pack",
+            )
 
 
 @pytest.mark.asyncio

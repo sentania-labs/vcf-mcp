@@ -28,6 +28,7 @@ PACK_CERTIFICATE_IDENTITY = (
 PACK_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com"
 PACK_REGISTRY = "ghcr.io"
 MAX_REGISTRY_TAG_PAGES = 50
+MAX_REGISTRY_REDIRECTS = 5
 PACK_REGISTRY_REPOSITORY = "sentania-labs/vcf-mcp"
 PACK_REGISTRY_REFERENCE = f"{PACK_REGISTRY}/{PACK_REGISTRY_REPOSITORY}"
 PACK_REGISTRY_TOKEN_URL = (
@@ -79,6 +80,8 @@ class PackTrustManager:
         persisted_trust_root_path: Path | None = None,
         cosign_path: Path = DEFAULT_COSIGN,
         temp_path: Path = Path("/tmp"),
+        certificate_identity: str = PACK_CERTIFICATE_IDENTITY,
+        certificate_issuer: str = PACK_CERTIFICATE_ISSUER,
     ) -> None:
         self._repository = repository
         self.store_path = Path(store_path)
@@ -93,6 +96,8 @@ class PackTrustManager:
         )
         self.cosign_path = Path(cosign_path)
         self.temp_path = Path(temp_path)
+        self.certificate_identity = certificate_identity
+        self.certificate_issuer = certificate_issuer
 
     @property
     def trust_root_path(self) -> Path:
@@ -187,10 +192,14 @@ class PackTrustManager:
         """Discover signed pack versions from GHCR's tag and manifest APIs."""
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            token_response = await client.get(PACK_REGISTRY_TOKEN_URL)
-            token_response.raise_for_status()
+            _, token_bytes, _ = await _read_registry_bytes(
+                client,
+                PACK_REGISTRY_TOKEN_URL,
+                max_bytes=MAX_BUNDLE_BYTES,
+                description="registry token response",
+            )
             try:
-                token = token_response.json()["token"]
+                token = json.loads(token_bytes)["token"]
                 if not isinstance(token, str) or not token:
                     raise TypeError
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -205,10 +214,15 @@ class PackTrustManager:
                 )
             )
             for _ in range(MAX_REGISTRY_TAG_PAGES):
-                tags_response = await client.get(page_url, headers=headers)
-                tags_response.raise_for_status()
+                tags_headers, tags_bytes, _ = await _read_registry_bytes(
+                    client,
+                    page_url,
+                    headers=headers,
+                    max_bytes=MAX_BUNDLE_BYTES,
+                    description="registry tag response",
+                )
                 try:
-                    page_tags = tags_response.json().get("tags", [])
+                    page_tags = json.loads(tags_bytes).get("tags", [])
                     if not isinstance(page_tags, list):
                         raise TypeError
                 except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -216,7 +230,9 @@ class PackTrustManager:
                         "registry tag response is malformed"
                     ) from exc
                 tags.extend(str(value) for value in page_tags)
-                next_link = tags_response.links.get("next", {}).get("url")
+                next_link = httpx.Response(200, headers=tags_headers).links.get(
+                    "next", {}
+                ).get("url")
                 if not next_link:
                     break
                 page_url = str(httpx.URL(page_url).join(next_link))
@@ -279,30 +295,34 @@ class PackTrustManager:
             f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}/"
             f"manifests/{quote(tag, safe='')}"
         )
-        manifest_response = await client.get(
+        manifest_headers, manifest_bytes, _ = await _read_registry_bytes(
+            client,
             manifest_url,
             headers={**headers, "Accept": OCI_MANIFEST_MEDIA_TYPE},
+            max_bytes=MAX_BUNDLE_BYTES,
+            description="registry pack manifest",
         )
-        manifest_response.raise_for_status()
-        manifest_bytes = manifest_response.content
-        if len(manifest_bytes) > MAX_BUNDLE_BYTES:
-            raise PackTrustError("registry pack manifest exceeds the size limit")
         manifest_digest = _sha256_digest(manifest_bytes)
-        advertised_digest = manifest_response.headers.get("Docker-Content-Digest")
+        advertised_digest = manifest_headers.get("Docker-Content-Digest")
         if advertised_digest and advertised_digest != manifest_digest:
             raise PackTrustError("registry pack manifest digest does not match")
         layer = _pack_layer_from_manifest(manifest_bytes)
         if int(layer["size"]) > MAX_PACK_BYTES:
             raise PackTrustError("registry pack exceeds the size limit")
         blob_digest = str(layer["digest"])
-        blob_response = await client.get(
+        _, pack_bytes, blob_redirects = await _read_registry_bytes(
+            client,
             f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}/"
             f"blobs/{quote(blob_digest, safe=':')}",
             headers=headers,
+            max_bytes=MAX_PACK_BYTES,
+            description="registry pack",
         )
-        blob_response.raise_for_status()
-        pack_bytes = blob_response.content
         _verify_blob_descriptor(pack_bytes, layer, limit=MAX_PACK_BYTES)
+        await asyncio.to_thread(
+            self._verify_registry_reference,
+            f"{PACK_REGISTRY_REFERENCE}:{tag}@{manifest_digest}",
+        )
         pack = self._load_bytes(pack_bytes)
         if pack.backend != backend or pack.version != version:
             raise PackTrustError("registry tag does not match the pack identity")
@@ -315,6 +335,7 @@ class PackTrustManager:
             "estimated_definition_tokens": result.estimated_definition_tokens,
             "reference": f"{PACK_REGISTRY_REFERENCE}:{tag}",
             "manifest_digest": manifest_digest,
+            "blob_redirects": blob_redirects,
         }
 
     def retained_versions(self) -> tuple[dict[str, str], ...]:
@@ -600,9 +621,9 @@ class PackTrustManager:
             "--bundle",
             str(bundle_path),
             "--certificate-identity",
-            PACK_CERTIFICATE_IDENTITY,
+            self.certificate_identity,
             "--certificate-oidc-issuer",
-            PACK_CERTIFICATE_ISSUER,
+            self.certificate_issuer,
             "--trusted-root",
             str(self.trust_root_path),
             "--offline",
@@ -622,6 +643,36 @@ class PackTrustManager:
         if completed.returncode != 0:
             raise PackTrustError(
                 "pack signature, workflow identity, or GitHub issuer verification failed"
+            )
+
+    def _verify_registry_reference(self, reference: str) -> None:
+        if not self.trust_root_path.is_file():
+            raise PackTrustError("the shipped pack trust root is unavailable")
+        command = [
+            str(self.cosign_path),
+            "verify",
+            "--certificate-identity",
+            self.certificate_identity,
+            "--certificate-oidc-issuer",
+            self.certificate_issuer,
+            "--trusted-root",
+            str(self.trust_root_path),
+            reference,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PackTrustError("cosign could not verify the registry pack") from exc
+        if completed.returncode != 0:
+            raise PackTrustError(
+                "registry pack signature, workflow identity, or GitHub issuer "
+                "verification failed"
             )
 
     def _save_oci_reference(self, reference: str, layout_path: Path) -> None:
@@ -667,9 +718,9 @@ class PackTrustManager:
             "verify",
             "--local-image",
             "--certificate-identity",
-            PACK_CERTIFICATE_IDENTITY,
+            self.certificate_identity,
             "--certificate-oidc-issuer",
-            PACK_CERTIFICATE_ISSUER,
+            self.certificate_issuer,
             "--trusted-root",
             str(self.trust_root_path),
             str(layout_path),
@@ -720,6 +771,72 @@ class PackTrustManager:
             candidate = Path(temporary) / "candidate.json"
             candidate.write_bytes(content)
             return PackTrustManager._load_one(candidate)
+
+
+async def _read_registry_bytes(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    max_bytes: int,
+    description: str,
+) -> tuple[httpx.Headers, bytes, int]:
+    """Read one registry response with bounded, HTTPS-only redirects."""
+
+    current_url = httpx.URL(url)
+    request_headers = dict(headers or {})
+    for redirect_count in range(MAX_REGISTRY_REDIRECTS + 1):
+        if current_url.scheme != "https":
+            raise PackTrustError(
+                f"{description} redirect refused a non-HTTPS destination"
+            )
+        async with client.stream(
+            "GET",
+            current_url,
+            headers=request_headers,
+            follow_redirects=False,
+        ) as response:
+            if response.is_redirect:
+                location = response.headers.get("Location")
+                if not location:
+                    raise PackTrustError(
+                        f"{description} redirect did not include a destination"
+                    )
+                redirected_url = current_url.join(location)
+                if redirected_url.scheme != "https":
+                    raise PackTrustError(
+                        f"{description} redirect refused a non-HTTPS destination"
+                    )
+                if (
+                    redirected_url.host,
+                    redirected_url.port,
+                ) != (current_url.host, current_url.port):
+                    request_headers = {
+                        name: value
+                        for name, value in request_headers.items()
+                        if name.lower() != "authorization"
+                    }
+                current_url = redirected_url
+                continue
+            response.raise_for_status()
+            advertised_length = response.headers.get("Content-Length")
+            if advertised_length is not None:
+                try:
+                    if int(advertised_length) > max_bytes:
+                        raise PackTrustError(
+                            f"{description} exceeds the size limit"
+                        )
+                except ValueError as exc:
+                    raise PackTrustError(
+                        f"{description} has a malformed content length"
+                    ) from exc
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(content) + len(chunk) > max_bytes:
+                    raise PackTrustError(f"{description} exceeds the size limit")
+                content.extend(chunk)
+            return response.headers, bytes(content), redirect_count
+    raise PackTrustError(f"{description} exceeded the redirect limit")
 
 
 def _install_result(pack: BackendPack, *, signed: bool) -> PackInstallResult:

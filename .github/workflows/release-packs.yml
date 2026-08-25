@@ -74,6 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
+      - uses: actions/checkout@v4
+      - name: Install appliance runtime
+        shell: bash
+        run: python -m pip install --disable-pip-version-check .
       - name: Install pinned OCI tools
         shell: bash
         run: |
@@ -86,6 +90,9 @@ jobs:
           curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
           echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
           install -m 0755 cosign "$RUNNER_TEMP/oci-tools/cosign"
+          curl -fsSLo "$RUNNER_TEMP/oci-tools/trusted_root.json" \
+            https://tuf-repo-cdn.sigstore.dev/targets/6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66.trusted_root.json
+          echo "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66  $RUNNER_TEMP/oci-tools/trusted_root.json" | sha256sum --check
           echo "$RUNNER_TEMP/oci-tools" >> "$GITHUB_PATH"
       - name: Pull without credentials and verify pinned workflow identity
         env:
@@ -116,6 +123,105 @@ jobs:
           fi
           echo "Anonymous pull matched SHA-256: $actual_sha256"
           echo "Pinned certificate identity verified: $pinned_identity"
+      - name: Exercise the appliance registry path anonymously
+        env:
+          COSIGN_PATH: ${{ runner.temp }}/oci-tools/cosign
+          DIGEST: ${{ needs.prove-oci-round-trip.outputs.digest }}
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker-config
+          EXPECTED_SHA256: ${{ needs.prove-oci-round-trip.outputs.expected-sha256 }}
+          REFERENCE: ${{ needs.prove-oci-round-trip.outputs.reference }}
+          TRUST_ROOT_PATH: ${{ runner.temp }}/oci-tools/trusted_root.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import asyncio
+          import hashlib
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+
+          import httpx
+
+          from vcf_mcp.contracts import BackendKind, Capability
+          from vcf_mcp.pack_trust import (
+              MAX_BUNDLE_BYTES,
+              PACK_REGISTRY_TOKEN_URL,
+              PackTrustManager,
+              _read_registry_bytes,
+          )
+          from vcf_mcp.runtime_repository import RuntimeRepository
+
+
+          async def main() -> None:
+              reference = os.environ["REFERENCE"]
+              digest = os.environ["DIGEST"]
+              tag = reference.rsplit(":", 1)[1]
+              source = json.loads(Path("src/vcf_mcp/packs/ops.json").read_text())
+              identity = (
+                  "https://github.com/sentania-labs/vcf-mcp/.github/workflows/"
+                  f"release-packs.yml@refs/heads/{os.environ['GITHUB_REF_NAME']}"
+              )
+              with tempfile.TemporaryDirectory() as temporary:
+                  root = Path(temporary)
+                  repository = RuntimeRepository(
+                      root / "data" / "config.sqlite3",
+                      root / "keys" / "credential_keyring.json",
+                      grantable_scopes=frozenset(Capability),
+                  )
+                  repository.bootstrap()
+                  try:
+                      manager = PackTrustManager(
+                          repository,
+                          store_path=root / "packs",
+                          trust_root_path=Path(os.environ["TRUST_ROOT_PATH"]),
+                          cosign_path=Path(os.environ["COSIGN_PATH"]),
+                          temp_path=root / "temp",
+                          certificate_identity=identity,
+                      )
+                      async with httpx.AsyncClient(timeout=30.0) as client:
+                          _, token_bytes, _ = await _read_registry_bytes(
+                              client,
+                              PACK_REGISTRY_TOKEN_URL,
+                              max_bytes=MAX_BUNDLE_BYTES,
+                              description="registry token response",
+                          )
+                          token = json.loads(token_bytes)["token"]
+                          entry = await manager._registry_entry(
+                              client,
+                              headers={"Authorization": f"Bearer {token}"},
+                              tag=tag,
+                              backend=BackendKind(str(source["backend"])),
+                              version=str(source["version"]),
+                          )
+                      if entry["manifest_digest"] != digest:
+                          raise RuntimeError("appliance resolved a different manifest")
+                      if int(entry["blob_redirects"]) < 1:
+                          raise RuntimeError("GHCR blob read did not exercise a redirect")
+                      result = await asyncio.to_thread(
+                          manager._install_from_registry_sync,
+                          str(entry["reference"]),
+                          str(entry["manifest_digest"]),
+                          BackendKind(str(entry["backend"])),
+                          str(entry["version"]),
+                      )
+                      staged = manager.staged_path / f"{result.backend}.json"
+                      actual_sha256 = hashlib.sha256(staged.read_bytes()).hexdigest()
+                      if actual_sha256 != os.environ["EXPECTED_SHA256"]:
+                          raise RuntimeError("appliance staged different pack bytes")
+                      print(
+                          "Appliance GHCR path verified: "
+                          f"redirects={entry['blob_redirects']} "
+                          f"digest={entry['manifest_digest']} "
+                          f"sha256={actual_sha256} identity={identity}"
+                      )
+                  finally:
+                      repository.close()
+
+
+          asyncio.run(main())
+          PY
 
   sign:
     name: Publish signed OCI backend packs

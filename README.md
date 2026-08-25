@@ -129,7 +129,7 @@ docker build -t vcf-mcp:prototype .
 docker volume create vcf-mcp-data
 docker volume create vcf-mcp-keys
 docker volume create vcf-mcp-audit
-docker run --name vcf-mcp --rm \
+docker run --name vcf-mcp --restart unless-stopped \
   --read-only \
   --user 10001:10001 \
   --security-opt no-new-privileges \
@@ -142,6 +142,10 @@ docker run --name vcf-mcp --rm \
   -v vcf-mcp-audit:/audit \
   vcf-mcp:prototype
 ```
+
+The restart policy is required for the console restart action. Without Compose,
+Kubernetes, or `--restart unless-stopped`, the orderly restart exits the process
+and the appliance stays down until an operator starts it again.
 
 Check readiness with `curl --fail http://localhost:8000/healthz`. A ready
 response is HTTP 200 and reports `audit_writable`, `configuration_ready`,
@@ -160,8 +164,8 @@ available for orchestrated deployments.
 2. Use **Restart appliance now** in the startup-frozen endpoints notice.
    Backend packs are selected and tool registries are frozen at startup, so the
    first registration for a product needs an orderly process restart. Sessions
-   disconnect and the container platform brings the appliance back
-   automatically.
+   disconnect. The appliance returns automatically only when its container has
+   a restart policy, or when it runs under Compose or Kubernetes.
 3. Edit each target, upload its CA bundle, enable TLS verification, and save.
 4. Choose local or gateway authorization mode. Changing an existing mode
    revokes every active key.

@@ -119,6 +119,7 @@ def test_bootstrap_login_target_registration_and_key_mint(
 
             dashboard = client.get("/admin")
             assert "Restart appliance now" in dashboard.text
+            assert "Without one, it stays stopped" in dashboard.text
             csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
             target_id = re.search(r'name="target_id" value="([^"]+)"', dashboard.text)
             assert csrf is not None and target_id is not None

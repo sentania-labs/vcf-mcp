@@ -22,7 +22,7 @@
     {% endfor %}
   </div>
   {% if restart_required %}
-  <p class="warning">A configuration or backend-pack change is waiting for a process restart. New connections will pause, active requests get a short grace period, and all console and MCP sessions will disconnect. The container platform will bring the appliance back automatically.</p>
+  <p class="warning">A configuration or backend-pack change is waiting for a process restart. New connections will pause, active requests get a short grace period, and all console and MCP sessions will disconnect. The appliance returns automatically only when this container has a restart policy or runs under Compose or Kubernetes. Without one, it stays stopped until an operator starts it.</p>
   <form method="post" action="/admin/restart">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button class="danger" type="submit">Restart appliance now</button>

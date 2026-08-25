@@ -3,6 +3,6 @@
 <section class="card notice">
   <h1>Restart requested</h1>
   <p>The appliance is stopping new work and allowing active requests a short grace period to finish. This session and every MCP session will disconnect.</p>
-  <p>The container platform will start the appliance again automatically. Refresh the console after the health check recovers.</p>
+  <p>If this container has a restart policy or runs under Compose or Kubernetes, the platform will start the appliance again automatically. Otherwise it stays stopped until an operator starts it. Refresh the console after the health check recovers.</p>
 </section>
 {% endblock %}

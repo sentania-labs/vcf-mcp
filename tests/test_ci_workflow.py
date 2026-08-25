@@ -115,6 +115,10 @@ def test_pack_workflow_proves_anonymous_pull_and_ends_legacy_feed_at_v030() -> N
     assert "oras login" not in anonymous_job
     assert "oras pull" in anonymous_job
     assert 'test "$actual_sha256" = "$expected_sha256"' in anonymous_job
+    assert "Exercise the appliance registry path anonymously" in text
+    assert "manager._registry_entry" in text
+    assert 'int(entry["blob_redirects"]) < 1' in text
+    assert "manager._install_from_registry_sync" in text
     assert 'if [ "$project_version" != "0.3.0" ]' in text
     assert "Publish final legacy signed-pack feed for v0.3.0" in text
 
@@ -125,3 +129,9 @@ def test_container_uses_the_bounded_clean_restart_runner() -> None:
     assert 'CMD ["python", "-m", "vcf_mcp.runner"]' in dockerfile
     assert "timeout_graceful_shutdown=graceful_shutdown_seconds" in runner
     assert "should_exit = True" in runner
+
+
+def test_standalone_container_has_restart_policy() -> None:
+    readme = (ROOT / "README.md").read_text()
+    assert "docker run --name vcf-mcp --restart unless-stopped" in readme
+    assert "docker run --name vcf-mcp --rm" not in readme
