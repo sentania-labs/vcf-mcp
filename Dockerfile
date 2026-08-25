@@ -49,4 +49,4 @@ EXPOSE 8000
 # vcf_mcp.app:create_app directly. --factory calls its factory with no
 # arguments, so create_app would take its audit_repository default of None
 # and /healthz would answer 503 forever. See src/vcf_mcp/main.py.
-CMD ["uvicorn", "vcf_mcp.main:create_production_app", "--host", "0.0.0.0", "--port", "8000", "--factory"]
+CMD ["python", "-m", "vcf_mcp.runner"]

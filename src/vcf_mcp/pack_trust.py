@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import subprocess
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -23,9 +26,17 @@ PACK_CERTIFICATE_IDENTITY = (
     "release-packs.yml@refs/heads/main"
 )
 PACK_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com"
-PACK_FEED_URL = (
-    "https://github.com/sentania-labs/vcf-mcp/releases/download/backend-packs/feed.json"
+PACK_REGISTRY = "ghcr.io"
+PACK_REGISTRY_REPOSITORY = "sentania-labs/vcf-mcp"
+PACK_REGISTRY_REFERENCE = f"{PACK_REGISTRY}/{PACK_REGISTRY_REPOSITORY}"
+PACK_REGISTRY_TOKEN_URL = (
+    "https://ghcr.io/token?service=ghcr.io&"
+    f"scope=repository:{PACK_REGISTRY_REPOSITORY}:pull"
 )
+PACK_ARTIFACT_TYPE = "application/vnd.sentania.vcf-mcp.backend-pack.v1+json"
+PACK_LAYER_MEDIA_TYPE = PACK_ARTIFACT_TYPE
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+PACK_TAG_PREFIX = "pack-"
 TRUST_ROOT_REFRESH_URL = (
     "https://raw.githubusercontent.com/sigstore/root-signing/"
     "main/repository/targets/trusted_root.json"
@@ -36,6 +47,7 @@ PERSISTED_TRUST_ROOT_NAME = "sigstore-trusted-root.json"
 DEFAULT_COSIGN = Path("/usr/local/bin/cosign")
 MAX_PACK_BYTES = 4 * 1024 * 1024
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
+MAX_OCI_LAYOUT_BYTES = 8 * 1024 * 1024
 MAX_TRUST_ROOT_BYTES = 1024 * 1024
 
 
@@ -99,9 +111,21 @@ class PackTrustManager:
             if pack_path.name.endswith(".sigstore.json"):
                 continue
             bundle_path = pack_path.with_suffix(".sigstore.json")
-            digest = hashlib.sha256(pack_path.read_bytes()).hexdigest()
+            oci_archive_path = pack_path.with_suffix(".oci.tar")
+            pack_bytes = pack_path.read_bytes()
+            digest = hashlib.sha256(pack_bytes).hexdigest()
             try:
-                if bundle_path.exists():
+                if bundle_path.exists() and oci_archive_path.exists():
+                    raise PackTrustError(
+                        "active pack has conflicting signature material"
+                    )
+                if oci_archive_path.exists():
+                    if self._verify_oci_archive(oci_archive_path) != pack_bytes:
+                        raise PackTrustError(
+                            "active pack does not match its signed OCI artifact"
+                        )
+                    verified_digest: str | None = digest
+                elif bundle_path.exists():
                     self._verify_signature(pack_path, bundle_path)
                     verified_digest: str | None = digest
                 else:
@@ -158,24 +182,55 @@ class PackTrustManager:
         )
         return digest
 
-    async def feed_catalog(self) -> tuple[dict[str, object], ...]:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get(PACK_FEED_URL)
-            response.raise_for_status()
-            content = response.content
-        if len(content) > MAX_PACK_BYTES:
-            raise PackTrustError("pack feed exceeds the size limit")
-        try:
-            document = json.loads(content)
-            entries = document["packs"]
-            if not isinstance(entries, list):
-                raise TypeError
-            return tuple(dict(entry) for entry in entries if isinstance(entry, dict))
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise PackTrustError("pack feed is malformed") from exc
+    async def registry_catalog(self) -> tuple[dict[str, object], ...]:
+        """Discover signed pack versions from GHCR's tag and manifest APIs."""
 
-    async def install_from_feed(self, entry_id: str) -> PackInstallResult:
-        entries = await self.feed_catalog()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            token_response = await client.get(PACK_REGISTRY_TOKEN_URL)
+            token_response.raise_for_status()
+            try:
+                token = token_response.json()["token"]
+                if not isinstance(token, str) or not token:
+                    raise TypeError
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise PackTrustError("registry token response is malformed") from exc
+            headers = {"Authorization": f"Bearer {token}"}
+            tags_response = await client.get(
+                f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}/tags/list",
+                params={"n": "1000"},
+                headers=headers,
+            )
+            tags_response.raise_for_status()
+            try:
+                tags = tags_response.json().get("tags", [])
+                if not isinstance(tags, list):
+                    raise TypeError
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise PackTrustError("registry tag response is malformed") from exc
+
+            entries: list[dict[str, object]] = []
+            for tag in sorted(str(value) for value in tags):
+                parsed = _pack_tag_parts(tag)
+                if parsed is None:
+                    continue
+                backend, version = parsed
+                entry = await self._registry_entry(
+                    client,
+                    headers=headers,
+                    tag=tag,
+                    backend=backend,
+                    version=version,
+                )
+                entries.append(entry)
+        return tuple(
+            sorted(
+                entries,
+                key=lambda entry: (str(entry["backend"]), str(entry["version"])),
+            )
+        )
+
+    async def install_from_registry(self, entry_id: str) -> PackInstallResult:
+        entries = await self.registry_catalog()
         entry = next(
             (
                 candidate
@@ -185,18 +240,65 @@ class PackTrustManager:
             None,
         )
         if entry is None:
-            raise PackTrustError("pack feed selection is no longer available")
-        pack_url = str(entry.get("pack_url", ""))
-        bundle_url = str(entry.get("bundle_url", ""))
-        if not pack_url.startswith("https://") or not bundle_url.startswith("https://"):
-            raise PackTrustError("pack feed URLs must use HTTPS")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            pack_response, bundle_response = await asyncio.gather(
-                client.get(pack_url), client.get(bundle_url)
-            )
-            pack_response.raise_for_status()
-            bundle_response.raise_for_status()
-        return await self.install_manual(pack_response.content, bundle_response.content)
+            raise PackTrustError("registry pack selection is no longer available")
+        return await asyncio.to_thread(
+            self._install_from_registry_sync,
+            str(entry["reference"]),
+            str(entry["manifest_digest"]),
+            BackendKind(str(entry["backend"])),
+            str(entry["version"]),
+        )
+
+    async def _registry_entry(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        headers: dict[str, str],
+        tag: str,
+        backend: BackendKind,
+        version: str,
+    ) -> dict[str, object]:
+        manifest_url = (
+            f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}/"
+            f"manifests/{quote(tag, safe='')}"
+        )
+        manifest_response = await client.get(
+            manifest_url,
+            headers={**headers, "Accept": OCI_MANIFEST_MEDIA_TYPE},
+        )
+        manifest_response.raise_for_status()
+        manifest_bytes = manifest_response.content
+        if len(manifest_bytes) > MAX_BUNDLE_BYTES:
+            raise PackTrustError("registry pack manifest exceeds the size limit")
+        manifest_digest = _sha256_digest(manifest_bytes)
+        advertised_digest = manifest_response.headers.get("Docker-Content-Digest")
+        if advertised_digest and advertised_digest != manifest_digest:
+            raise PackTrustError("registry pack manifest digest does not match")
+        layer = _pack_layer_from_manifest(manifest_bytes)
+        if int(layer["size"]) > MAX_PACK_BYTES:
+            raise PackTrustError("registry pack exceeds the size limit")
+        blob_digest = str(layer["digest"])
+        blob_response = await client.get(
+            f"https://{PACK_REGISTRY}/v2/{PACK_REGISTRY_REPOSITORY}/"
+            f"blobs/{quote(blob_digest, safe=':')}",
+            headers=headers,
+        )
+        blob_response.raise_for_status()
+        pack_bytes = blob_response.content
+        _verify_blob_descriptor(pack_bytes, layer, limit=MAX_PACK_BYTES)
+        pack = self._load_bytes(pack_bytes)
+        if pack.backend != backend or pack.version != version:
+            raise PackTrustError("registry tag does not match the pack identity")
+        result = _install_result(pack, signed=True)
+        return {
+            "id": f"{backend.value}:{version}",
+            "backend": backend.value,
+            "version": version,
+            "tool_count": result.tool_count,
+            "estimated_definition_tokens": result.estimated_definition_tokens,
+            "reference": f"{PACK_REGISTRY_REFERENCE}:{tag}",
+            "manifest_digest": manifest_digest,
+        }
 
     def retained_versions(self) -> tuple[dict[str, str], ...]:
         if not self.retained_path.exists():
@@ -208,6 +310,49 @@ class PackTrustManager:
             pack = self._load_one(path)
             versions.append({"backend": pack.backend.value, "version": pack.version})
         return tuple(versions)
+
+    def _install_from_registry_sync(
+        self,
+        reference: str,
+        manifest_digest: str,
+        backend: BackendKind,
+        version: str,
+    ) -> PackInstallResult:
+        if not reference.startswith(f"{PACK_REGISTRY_REFERENCE}:"):
+            raise PackTrustError("registry pack reference is outside the pinned repository")
+        _validated_sha256_digest(manifest_digest)
+        self.temp_path.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(dir=self.temp_path) as temporary:
+                layout_path = Path(temporary) / "signed-pack"
+                self._save_oci_reference(
+                    f"{reference}@{manifest_digest}",
+                    layout_path,
+                )
+                pack_bytes = self._verify_oci_layout(
+                    layout_path,
+                    expected_manifest_digest=manifest_digest,
+                )
+                pack = self._load_bytes(pack_bytes)
+                if pack.backend != backend or pack.version != version:
+                    raise PackTrustError(
+                        "verified OCI artifact does not match the selected pack"
+                    )
+                return self._stage_candidate(
+                    pack_bytes,
+                    pack=pack,
+                    signed=True,
+                    oci_archive_bytes=_archive_oci_layout(layout_path),
+                )
+        except Exception:
+            self._repository.record_configuration_event_at_startup(
+                "pack_signature_refused",
+                {
+                    "backend": backend.value,
+                    "manifest_digest": manifest_digest,
+                },
+            )
+            raise
 
     def _install_manual_sync(
         self, pack_bytes: bytes, bundle_bytes: bytes | None
@@ -238,24 +383,46 @@ class PackTrustManager:
                     "pack_signature_refused", {"digest": digest}
                 )
                 raise
-            self.staged_path.mkdir(parents=True, exist_ok=True)
-            destination = self.staged_path / f"{pack.backend.value}.json"
-            _atomic_private_write(destination, pack_bytes)
-            destination_bundle = destination.with_suffix(".sigstore.json")
-            if signed:
-                _atomic_private_write(destination_bundle, bundle_bytes or b"")
-            else:
-                destination_bundle.unlink(missing_ok=True)
-            self._repository.record_configuration_event_at_startup(
-                "pack_staged",
-                {
-                    "backend": pack.backend.value,
-                    "version": pack.version,
-                    "digest": pack.digest,
-                    "signed": signed,
-                },
+            return self._stage_candidate(
+                pack_bytes,
+                pack=pack,
+                signed=signed,
+                bundle_bytes=bundle_bytes,
             )
-            return _install_result(pack, signed=signed)
+
+    def _stage_candidate(
+        self,
+        pack_bytes: bytes,
+        *,
+        pack: BackendPack,
+        signed: bool,
+        bundle_bytes: bytes | None = None,
+        oci_archive_bytes: bytes | None = None,
+    ) -> PackInstallResult:
+        self.staged_path.mkdir(parents=True, exist_ok=True)
+        destination = self.staged_path / f"{pack.backend.value}.json"
+        _atomic_private_write(destination, pack_bytes)
+        destination_bundle = destination.with_suffix(".sigstore.json")
+        destination_oci = destination.with_suffix(".oci.tar")
+        if bundle_bytes is not None:
+            _atomic_private_write(destination_bundle, bundle_bytes)
+            destination_oci.unlink(missing_ok=True)
+        elif oci_archive_bytes is not None:
+            _atomic_private_write(destination_oci, oci_archive_bytes)
+            destination_bundle.unlink(missing_ok=True)
+        else:
+            destination_bundle.unlink(missing_ok=True)
+            destination_oci.unlink(missing_ok=True)
+        self._repository.record_configuration_event_at_startup(
+            "pack_staged",
+            {
+                "backend": pack.backend.value,
+                "version": pack.version,
+                "digest": pack.digest,
+                "signed": signed,
+            },
+        )
+        return _install_result(pack, signed=signed)
 
     def _install_staged_sync(
         self, backend: BackendKind, digest: str
@@ -267,8 +434,15 @@ class PackTrustManager:
         if hashlib.sha256(candidate_bytes).hexdigest() != digest:
             raise PackTrustError("staged pack changed after operator review")
         bundle = candidate.with_suffix(".sigstore.json")
-        signed = bundle.exists()
-        if signed:
+        oci_archive = candidate.with_suffix(".oci.tar")
+        if bundle.exists() and oci_archive.exists():
+            raise PackTrustError("staged pack has conflicting signature material")
+        if oci_archive.exists():
+            if self._verify_oci_archive(oci_archive) != candidate_bytes:
+                raise PackTrustError(
+                    "staged pack does not match its signed OCI artifact"
+                )
+        elif bundle.exists():
             self._verify_signature(candidate, bundle)
         else:
             self._refuse_unsigned_if_unsafe()
@@ -277,12 +451,14 @@ class PackTrustManager:
             raise PackTrustError("staged pack backend changed after operator review")
         result = self._activate_candidate(
             candidate,
-            bundle if signed else None,
+            bundle if bundle.exists() else None,
+            oci_archive if oci_archive.exists() else None,
             pack=pack,
             candidate_bytes=candidate_bytes,
         )
         candidate.unlink()
         bundle.unlink(missing_ok=True)
+        oci_archive.unlink(missing_ok=True)
         return result
 
     def _rollback_sync(self, backend: BackendKind, version: str) -> PackInstallResult:
@@ -290,7 +466,15 @@ class PackTrustManager:
         if not retained.exists():
             raise PackTrustError("retained pack version does not exist")
         bundle = retained.with_suffix(".sigstore.json")
-        if bundle.exists():
+        oci_archive = retained.with_suffix(".oci.tar")
+        if bundle.exists() and oci_archive.exists():
+            raise PackTrustError("retained pack has conflicting signature material")
+        if oci_archive.exists():
+            if self._verify_oci_archive(oci_archive) != retained.read_bytes():
+                raise PackTrustError(
+                    "retained pack does not match its signed OCI artifact"
+                )
+        elif bundle.exists():
             self._verify_signature(retained, bundle)
         else:
             self._refuse_unsigned_if_unsafe()
@@ -298,6 +482,7 @@ class PackTrustManager:
         result = self._activate_candidate(
             retained,
             bundle if bundle.exists() else None,
+            oci_archive if oci_archive.exists() else None,
             pack=pack,
             candidate_bytes=retained.read_bytes(),
         )
@@ -311,6 +496,7 @@ class PackTrustManager:
         self,
         candidate: Path,
         bundle: Path | None,
+        oci_archive: Path | None,
         *,
         pack: BackendPack | None = None,
         candidate_bytes: bytes | None = None,
@@ -321,16 +507,23 @@ class PackTrustManager:
         )
         if hashlib.sha256(content).hexdigest() != pack.digest:
             raise PackTrustError("verified pack changed before activation")
-        signed = bundle is not None
+        signed = bundle is not None or oci_archive is not None
         self._retain_current(pack.backend)
         destination = self.active_path / f"{pack.backend.value}.json"
         _atomic_private_write(destination, content)
         destination_bundle = destination.with_suffix(".sigstore.json")
+        destination_oci = destination.with_suffix(".oci.tar")
         if bundle is not None:
             _atomic_private_write(destination_bundle, bundle.read_bytes())
+            destination_oci.unlink(missing_ok=True)
+        elif oci_archive is not None:
+            _atomic_private_write(destination_oci, oci_archive.read_bytes())
+            destination_bundle.unlink(missing_ok=True)
         else:
             destination_bundle.unlink(missing_ok=True)
+            destination_oci.unlink(missing_ok=True)
             self._repository.set_pack_action_trust_at_startup(False)
+        self._repository.set_restart_required_at_startup(True)
         self._repository.record_configuration_event_at_startup(
             "pack_installed",
             {
@@ -347,8 +540,18 @@ class PackTrustManager:
         if not current.exists():
             return
         bundle = current.with_suffix(".sigstore.json")
+        oci_archive = current.with_suffix(".oci.tar")
         try:
-            if bundle.exists():
+            if bundle.exists() and oci_archive.exists():
+                raise PackTrustError(
+                    "active pack has conflicting signature material"
+                )
+            if oci_archive.exists():
+                if self._verify_oci_archive(oci_archive) != current.read_bytes():
+                    raise PackTrustError(
+                        "active pack does not match its signed OCI artifact"
+                    )
+            elif bundle.exists():
                 self._verify_signature(current, bundle)
             pack = self._load_one(current)
         except PackTrustError:
@@ -361,6 +564,15 @@ class PackTrustManager:
             _atomic_private_write(
                 destination.with_suffix(".sigstore.json"), bundle.read_bytes()
             )
+            destination.with_suffix(".oci.tar").unlink(missing_ok=True)
+        if oci_archive.exists():
+            _atomic_private_write(
+                destination.with_suffix(".oci.tar"), oci_archive.read_bytes()
+            )
+            destination.with_suffix(".sigstore.json").unlink(missing_ok=True)
+        if not bundle.exists() and not oci_archive.exists():
+            destination.with_suffix(".sigstore.json").unlink(missing_ok=True)
+            destination.with_suffix(".oci.tar").unlink(missing_ok=True)
 
     def _verify_signature(self, pack_path: Path, bundle_path: Path) -> None:
         if not self.trust_root_path.is_file():
@@ -395,6 +607,75 @@ class PackTrustManager:
                 "pack signature, workflow identity, or GitHub issuer verification failed"
             )
 
+    def _save_oci_reference(self, reference: str, layout_path: Path) -> None:
+        command = [
+            str(self.cosign_path),
+            "save",
+            "--dir",
+            str(layout_path),
+            reference,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PackTrustError("cosign could not download the signed OCI pack") from exc
+        if completed.returncode != 0:
+            raise PackTrustError("the signed OCI pack could not be downloaded")
+
+    def _verify_oci_archive(self, archive_path: Path) -> bytes:
+        if archive_path.stat().st_size > MAX_OCI_LAYOUT_BYTES:
+            raise PackTrustError("signed OCI pack archive exceeds the size limit")
+        self.temp_path.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=self.temp_path) as temporary:
+            layout_path = Path(temporary) / "signed-pack"
+            _extract_oci_layout(archive_path, layout_path)
+            return self._verify_oci_layout(layout_path)
+
+    def _verify_oci_layout(
+        self,
+        layout_path: Path,
+        *,
+        expected_manifest_digest: str | None = None,
+    ) -> bytes:
+        if not self.trust_root_path.is_file():
+            raise PackTrustError("the shipped pack trust root is unavailable")
+        command = [
+            str(self.cosign_path),
+            "verify",
+            "--local-image",
+            "--certificate-identity",
+            PACK_CERTIFICATE_IDENTITY,
+            "--certificate-oidc-issuer",
+            PACK_CERTIFICATE_ISSUER,
+            "--trusted-root",
+            str(self.trust_root_path),
+            str(layout_path),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PackTrustError("cosign could not verify the OCI pack") from exc
+        if completed.returncode != 0:
+            raise PackTrustError(
+                "OCI pack signature, workflow identity, or GitHub issuer verification failed"
+            )
+        return _pack_bytes_from_oci_layout(
+            layout_path,
+            expected_manifest_digest=expected_manifest_digest,
+        )
+
     def _refuse_unsigned_if_unsafe(self) -> None:
         if not self._repository.unsigned_packs_allowed_at_startup():
             raise PackTrustError("unsigned pack installation is disabled")
@@ -408,10 +689,20 @@ class PackTrustManager:
         with tempfile.TemporaryDirectory() as temporary:
             candidate = Path(temporary) / "candidate.json"
             candidate.write_bytes(path.read_bytes())
-            packs = _load_pack_directory(candidate.parent, source_kind=None)
+            try:
+                packs = _load_pack_directory(candidate.parent, source_kind=None)
+            except ValueError as exc:
+                raise PackTrustError("pack file is invalid") from exc
         if len(packs) != 1:
             raise PackTrustError("pack file must declare one backend")
         return next(iter(packs.values()))
+
+    @staticmethod
+    def _load_bytes(content: bytes) -> BackendPack:
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "candidate.json"
+            candidate.write_bytes(content)
+            return PackTrustManager._load_one(candidate)
 
 
 def _install_result(pack: BackendPack, *, signed: bool) -> PackInstallResult:
@@ -437,6 +728,155 @@ def _safe_version(version: str) -> str:
     ):
         raise PackTrustError("pack version is not filesystem-safe")
     return version
+
+
+def _pack_tag_parts(tag: str) -> tuple[BackendKind, str] | None:
+    for backend in sorted(BackendKind, key=lambda value: len(value.value), reverse=True):
+        prefix = f"{PACK_TAG_PREFIX}{backend.value}-"
+        if tag.startswith(prefix):
+            version = tag.removeprefix(prefix)
+            return backend, _safe_version(version)
+    return None
+
+
+def _validated_sha256_digest(value: str) -> str:
+    prefix = "sha256:"
+    hexadecimal = value.removeprefix(prefix)
+    if (
+        not value.startswith(prefix)
+        or len(hexadecimal) != 64
+        or any(character not in "0123456789abcdef" for character in hexadecimal)
+    ):
+        raise PackTrustError("OCI digest is not a valid SHA-256 digest")
+    return hexadecimal
+
+
+def _sha256_digest(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _pack_layer_from_manifest(content: bytes) -> dict[str, object]:
+    try:
+        document = json.loads(content)
+        if (
+            not isinstance(document, dict)
+            or document.get("schemaVersion") != 2
+            or document.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE
+            or document.get("artifactType") != PACK_ARTIFACT_TYPE
+        ):
+            raise TypeError
+        layers = document["layers"]
+        if not isinstance(layers, list) or len(layers) != 1:
+            raise TypeError
+        layer = layers[0]
+        if (
+            not isinstance(layer, dict)
+            or layer.get("mediaType") != PACK_LAYER_MEDIA_TYPE
+            or not isinstance(layer.get("size"), int)
+            or int(layer["size"]) < 1
+        ):
+            raise TypeError
+        _validated_sha256_digest(str(layer["digest"]))
+        return dict(layer)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PackTrustError("OCI pack manifest is malformed") from exc
+
+
+def _verify_blob_descriptor(
+    content: bytes,
+    descriptor: dict[str, object],
+    *,
+    limit: int,
+) -> None:
+    if not content or len(content) > limit or len(content) != int(descriptor["size"]):
+        raise PackTrustError("OCI pack layer size does not match")
+    if _sha256_digest(content) != str(descriptor["digest"]):
+        raise PackTrustError("OCI pack layer digest does not match")
+
+
+def _pack_bytes_from_oci_layout(
+    layout_path: Path,
+    *,
+    expected_manifest_digest: str | None = None,
+) -> bytes:
+    try:
+        index_bytes = (layout_path / "index.json").read_bytes()
+        if len(index_bytes) > MAX_BUNDLE_BYTES:
+            raise PackTrustError("OCI index exceeds the size limit")
+        index = json.loads(index_bytes)
+        manifests = index["manifests"]
+        candidates = [
+            descriptor
+            for descriptor in manifests
+            if isinstance(descriptor, dict)
+            and descriptor.get("artifactType") == PACK_ARTIFACT_TYPE
+        ]
+        if len(candidates) != 1:
+            raise TypeError
+        manifest_descriptor = candidates[0]
+        manifest_digest = str(manifest_descriptor["digest"])
+        hexadecimal = _validated_sha256_digest(manifest_digest)
+        if expected_manifest_digest is not None and manifest_digest != expected_manifest_digest:
+            raise PackTrustError("downloaded OCI manifest digest changed")
+        manifest_path = layout_path / "blobs" / "sha256" / hexadecimal
+        manifest_bytes = manifest_path.read_bytes()
+        if len(manifest_bytes) > MAX_BUNDLE_BYTES:
+            raise PackTrustError("OCI pack manifest exceeds the size limit")
+        if _sha256_digest(manifest_bytes) != manifest_digest:
+            raise PackTrustError("saved OCI manifest digest does not match")
+        layer = _pack_layer_from_manifest(manifest_bytes)
+        layer_hexadecimal = _validated_sha256_digest(str(layer["digest"]))
+        pack_bytes = (
+            layout_path / "blobs" / "sha256" / layer_hexadecimal
+        ).read_bytes()
+        _verify_blob_descriptor(pack_bytes, layer, limit=MAX_PACK_BYTES)
+        return pack_bytes
+    except PackTrustError:
+        raise
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PackTrustError("saved OCI pack layout is malformed") from exc
+
+
+def _archive_oci_layout(layout_path: Path) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for path in sorted(layout_path.rglob("*")):
+            if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                raise PackTrustError("saved OCI pack layout contains an unsafe file")
+            archive.add(path, arcname=path.relative_to(layout_path), recursive=False)
+    content = buffer.getvalue()
+    if len(content) > MAX_OCI_LAYOUT_BYTES:
+        raise PackTrustError("signed OCI pack archive exceeds the size limit")
+    return content
+
+
+def _extract_oci_layout(archive_path: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=False)
+    try:
+        with tarfile.open(archive_path, mode="r:*") as archive:
+            members = archive.getmembers()
+            total_size = 0
+            for member in members:
+                parts = Path(member.name).parts
+                if (
+                    not parts
+                    or member.name.startswith("/")
+                    or ".." in parts
+                    or not (member.isfile() or member.isdir())
+                ):
+                    raise PackTrustError(
+                        "signed OCI pack archive contains an unsafe entry"
+                    )
+                total_size += member.size
+                if total_size > MAX_OCI_LAYOUT_BYTES:
+                    raise PackTrustError(
+                        "signed OCI pack archive expands beyond the size limit"
+                    )
+            archive.extractall(destination, members=members, filter="data")
+    except PackTrustError:
+        raise
+    except (OSError, tarfile.TarError) as exc:
+        raise PackTrustError("signed OCI pack archive is malformed") from exc
 
 
 def _atomic_private_write(path: Path, content: bytes) -> None:

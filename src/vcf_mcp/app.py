@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from starlette.applications import Starlette
@@ -95,6 +96,7 @@ class StructuralAuditMiddleware(BaseHTTPMiddleware):
         "/admin/authorization-mode",
         "/admin/credential-rotation",
         "/admin/packs",
+        "/admin/restart",
     )
 
     async def dispatch(self, request: Request, call_next):
@@ -130,6 +132,7 @@ def create_app(
     mcp_ready: bool | None = None,
     session_https_only: bool = True,
     pack_trust_manager: PackTrustManager | None = None,
+    restart_requester: Callable[[], None] | None = None,
 ) -> Starlette:
     """Compose the parent app while retaining explicit test seams."""
 
@@ -208,4 +211,5 @@ def create_app(
     )
     app.state.mcp_surfaces = mcp_surfaces
     app.state.pack_trust_manager = pack_trust_manager
+    app.state.restart_requester = restart_requester
     return app

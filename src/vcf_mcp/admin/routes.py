@@ -8,6 +8,7 @@ import secrets
 
 import httpx
 
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
@@ -475,7 +476,7 @@ async def post_pack_trust_refresh(request: Request):
     return RedirectResponse(url="/admin", status_code=303)
 
 
-async def post_pack_feed_check(request: Request):
+async def post_pack_registry_check(request: Request):
     check = await require_auth(request)
     if check:
         return check
@@ -485,13 +486,13 @@ async def post_pack_feed_check(request: Request):
             request, "error.html", {"message": "CSRF verification failed."}, status_code=403
         )
     try:
-        entries = await _pack_manager(request).feed_catalog()
+        entries = await _pack_manager(request).registry_catalog()
     except (PackTrustError, httpx.HTTPError) as exc:
         return await _dashboard_response(request, error=str(exc), status_code=502)
-    return await _dashboard_response(request, feed_entries=entries)
+    return await _dashboard_response(request, registry_entries=entries)
 
 
-async def post_pack_feed_install(request: Request):
+async def post_pack_registry_install(request: Request):
     check = await require_auth(request)
     if check:
         return check
@@ -504,7 +505,7 @@ async def post_pack_feed_install(request: Request):
             request, "error.html", {"message": "CSRF verification failed."}, status_code=403
         )
     try:
-        result = await _pack_manager(request).install_from_feed(
+        result = await _pack_manager(request).install_from_registry(
             str(form.get("entry_id", ""))
         )
     except (PackTrustError, httpx.HTTPError) as exc:
@@ -537,6 +538,46 @@ async def post_pack_confirm(request: Request):
         return await _dashboard_response(request, error=str(exc), status_code=400)
     auth.rotate_session(request)
     return RedirectResponse(url="/admin", status_code=303)
+
+
+async def post_restart(request: Request):
+    check = await require_auth(request)
+    if check:
+        return check
+    reauth = auth.require_recent_reauth(request)
+    if reauth:
+        return reauth
+    form = await request.form()
+    if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
+        )
+    restart_requester = getattr(request.app.state, "restart_requester", None)
+    if not callable(restart_requester):
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"message": "Orderly restart is unavailable."},
+            status_code=503,
+        )
+    await _repository(request).record_configuration_event(
+        "operator_restart_requested",
+        {
+            "operator": str(request.session["user_id"]),
+            "grace_period_seconds": 10,
+        },
+    )
+    auth.rotate_session(request)
+    return templates.TemplateResponse(
+        request,
+        "restarting.html",
+        {},
+        status_code=202,
+        background=BackgroundTask(restart_requester),
+    )
 
 
 async def get_reauth(request: Request):
@@ -622,7 +663,7 @@ async def _dashboard_response(
     *,
     error: str | None = None,
     status_code: int = 200,
-    feed_entries: tuple[dict[str, object], ...] = (),
+    registry_entries: tuple[dict[str, object], ...] = (),
 ):
     repository = _repository(request)
     surfaces = getattr(request.app.state, "mcp_surfaces", None)
@@ -648,6 +689,7 @@ async def _dashboard_response(
             "api_keys": await repository.list_api_keys(),
             "authorization_mode": await repository.authorization_mode(),
             "rotation_status": await repository.rotation_status(),
+            "restart_required": await repository.restart_required(),
             "configuration_events": await repository.configuration_events(limit=20),
             "unsigned_packs_allowed": await repository.unsigned_packs_allowed(),
             "active_unsigned_packs": tuple(
@@ -658,7 +700,7 @@ async def _dashboard_response(
                 if isinstance(pack_manager, PackTrustManager)
                 else ()
             ),
-            "pack_feed_entries": feed_entries,
+            "pack_registry_entries": registry_entries,
             "installed_pack_versions": {
                 pack.backend.value: pack.version for pack in backend_packs
             },
@@ -746,18 +788,23 @@ admin_routes = [
         methods=["POST"],
     ),
     Route(
-        "/admin/packs/feed/check",
-        endpoint=_degraded_to_503(post_pack_feed_check),
+        "/admin/packs/registry/check",
+        endpoint=_degraded_to_503(post_pack_registry_check),
         methods=["POST"],
     ),
     Route(
-        "/admin/packs/feed/install",
-        endpoint=_degraded_to_503(post_pack_feed_install),
+        "/admin/packs/registry/install",
+        endpoint=_degraded_to_503(post_pack_registry_install),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/confirm",
         endpoint=_degraded_to_503(post_pack_confirm),
+        methods=["POST"],
+    ),
+    Route(
+        "/admin/restart",
+        endpoint=_degraded_to_503(post_restart),
         methods=["POST"],
     ),
 ]

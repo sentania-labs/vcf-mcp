@@ -21,7 +21,7 @@ jobs:
   prove-oci-round-trip:
     name: Prove signed OCI pack round trip
     if: github.event_name == 'workflow_dispatch' && inputs.prove_oci_round_trip
-    runs-on: lab
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -61,15 +61,17 @@ jobs:
             src/vcf_mcp/packs/ops.json:application/vnd.sentania.vcf-mcp.backend-pack.v1+json
           digest="$(oras resolve "$reference")"
           cosign sign --yes "${reference}@${digest}"
-          echo "reference=$reference" >> "$GITHUB_OUTPUT"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "expected-sha256=$(sha256sum src/vcf_mcp/packs/ops.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          {
+            echo "reference=$reference"
+            echo "digest=$digest"
+            echo "expected-sha256=$(sha256sum src/vcf_mcp/packs/ops.json | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
           echo "Published signed non-image OCI artifact: ${reference}@${digest}"
 
   prove-oci-round-trip-anonymous:
     name: Verify and pull OCI pack anonymously
     needs: prove-oci-round-trip
-    runs-on: lab
+    runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Install pinned OCI tools
@@ -116,33 +118,85 @@ jobs:
           echo "Pinned certificate identity verified: $pinned_identity"
 
   sign:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.prove_oci_round_trip }}
+    name: Publish signed OCI backend packs
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || !inputs.prove_oci_round_trip) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
+      packages: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      legacy-feed: ${{ steps.legacy.outputs.enabled }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install pinned cosign
+      - name: Install pinned OCI tools
         shell: bash
         run: |
           set -euo pipefail
+          curl -fsSLo oras.tar.gz https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
+          echo "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/oci-tools"
+          tar -xzf oras.tar.gz -C "$RUNNER_TEMP/oci-tools" oras
+          chmod 0755 "$RUNNER_TEMP/oci-tools/oras"
           curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
           echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
-          chmod 0755 cosign
-      - name: Sign packs with GitHub OIDC
+          install -m 0755 cosign "$RUNNER_TEMP/oci-tools/cosign"
+          echo "$RUNNER_TEMP/oci-tools" >> "$GITHUB_PATH"
+      - name: Push immutable pack versions and sign their manifest digests
+        id: publish
+        env:
+          GHCR_PASSWORD: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir signed-packs
+          printf '%s' "$GHCR_PASSWORD" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          : > published.tsv
           for pack in src/vcf_mcp/packs/*.json; do
-            name="$(basename "${pack}")"
-            cp "${pack}" "signed-packs/${name}"
-            ./cosign sign-blob --yes --bundle "signed-packs/${name%.json}.sigstore.json" "${pack}"
+            backend="$(jq -r .backend "$pack")"
+            version="$(jq -r .version "$pack")"
+            [[ "$backend" =~ ^[a-z0-9-]+$ ]]
+            [[ "$version" =~ ^[A-Za-z0-9._-]+$ ]]
+            reference="ghcr.io/sentania-labs/vcf-mcp:pack-${backend}-${version}"
+            expected_sha256="$(sha256sum "$pack" | cut -d' ' -f1)"
+            if digest="$(oras resolve "$reference" 2>/dev/null)"; then
+              pull_dir="$(mktemp -d)"
+              oras pull --output "$pull_dir" "${reference}@${digest}"
+              actual_sha256="$(sha256sum "$pull_dir/$pack" | cut -d' ' -f1)"
+              test "$actual_sha256" = "$expected_sha256"
+              cosign verify \
+                --certificate-identity https://github.com/sentania-labs/vcf-mcp/.github/workflows/release-packs.yml@refs/heads/main \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                "${reference}@${digest}" >/dev/null
+            else
+              oras push \
+                --artifact-type application/vnd.sentania.vcf-mcp.backend-pack.v1+json \
+                --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+                "$reference" \
+                "$pack":application/vnd.sentania.vcf-mcp.backend-pack.v1+json
+              digest="$(oras resolve "$reference")"
+              cosign sign --yes "${reference}@${digest}"
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$reference" "$digest" "$expected_sha256" "$pack" >> published.tsv
           done
-      - name: Build fixed feed catalog
+          echo "published=$(base64 -w0 published.tsv)" >> "$GITHUB_OUTPUT"
+      - name: Build v0.3.0 legacy release feed
+        id: legacy
         shell: bash
         run: |
+          set -euo pipefail
+          project_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$project_version" != "0.3.0" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          mkdir signed-packs
+          for pack in src/vcf_mcp/packs/*.json; do
+            name="$(basename "$pack")"
+            cp "$pack" "signed-packs/$name"
+            cosign sign-blob --yes --bundle "signed-packs/${name%.json}.sigstore.json" "$pack"
+          done
           python - <<'PY'
           import json
           from pathlib import Path
@@ -177,7 +231,8 @@ jobs:
               json.dumps({"packs": entries}, indent=2) + "\n"
           )
           PY
-      - name: Publish fixed signed-pack feed
+      - name: Publish final legacy signed-pack feed for v0.3.0
+        if: steps.legacy.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -187,7 +242,48 @@ jobs:
           fi
           gh release upload backend-packs signed-packs/* --clobber
       - uses: actions/upload-artifact@v4
+        if: steps.legacy.outputs.enabled == 'true'
         with:
-          name: signed-backend-packs
+          name: legacy-signed-backend-packs-v0.3.0
           path: signed-packs/
           if-no-files-found: error
+
+  verify-published-packs:
+    name: Verify public signed backend packs
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Install pinned OCI tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo oras.tar.gz https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz
+          echo "6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64  oras.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/oci-tools"
+          tar -xzf oras.tar.gz -C "$RUNNER_TEMP/oci-tools" oras
+          chmod 0755 "$RUNNER_TEMP/oci-tools/oras"
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
+          echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
+          install -m 0755 cosign "$RUNNER_TEMP/oci-tools/cosign"
+          echo "$RUNNER_TEMP/oci-tools" >> "$GITHUB_PATH"
+      - name: Pull and verify every pack without registry credentials
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker-config
+          PUBLISHED: ${{ needs.sign.outputs.published }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DOCKER_CONFIG"
+          echo "$PUBLISHED" | base64 --decode > published.tsv
+          while IFS=$'\t' read -r reference digest expected_sha256 source_path; do
+            pull_dir="$(mktemp -d)"
+            oras pull --output "$pull_dir" "${reference}@${digest}"
+            actual_sha256="$(sha256sum "$pull_dir/$source_path" | cut -d' ' -f1)"
+            test "$actual_sha256" = "$expected_sha256"
+            cosign verify \
+              --certificate-identity https://github.com/sentania-labs/vcf-mcp/.github/workflows/release-packs.yml@refs/heads/main \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${reference}@${digest}"
+            echo "Anonymous pull and pinned identity verified: ${reference}@${digest}"
+          done < published.tsv

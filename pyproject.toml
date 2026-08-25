@@ -1,6 +1,6 @@
 [project]
 name = "vcf-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sentania multi-backend VCF MCP prototype (unofficial)"
 requires-python = ">=3.12"
 dependencies = [

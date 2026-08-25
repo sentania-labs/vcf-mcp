@@ -10,10 +10,15 @@ import pytest
 from vcf_mcp.backend_packs import DEFAULT_PACKS_PATH, load_backend_packs
 from vcf_mcp.contracts import BackendKind, Capability, TargetPosture
 from vcf_mcp.pack_trust import (
+    OCI_MANIFEST_MEDIA_TYPE,
+    PACK_ARTIFACT_TYPE,
     PACK_CERTIFICATE_IDENTITY,
     PACK_CERTIFICATE_ISSUER,
+    PACK_LAYER_MEDIA_TYPE,
+    PACK_REGISTRY_REFERENCE,
     PackTrustError,
     PackTrustManager,
+    _sha256_digest,
 )
 from vcf_mcp.runtime_repository import RuntimeRepository
 
@@ -61,6 +66,56 @@ def _manager(
         cosign_path=cosign,
         temp_path=tmp_path / "temp",
     )
+
+
+def _write_oci_layout(layout: Path, pack_bytes: bytes) -> str:
+    pack_digest = _sha256_digest(pack_bytes)
+    manifest_bytes = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+            "artifactType": PACK_ARTIFACT_TYPE,
+            "config": {
+                "mediaType": "application/vnd.oci.empty.v1+json",
+                "digest": "sha256:" + "0" * 64,
+                "size": 2,
+            },
+            "layers": [
+                {
+                    "mediaType": PACK_LAYER_MEDIA_TYPE,
+                    "digest": pack_digest,
+                    "size": len(pack_bytes),
+                }
+            ],
+        },
+        separators=(",", ":"),
+    ).encode()
+    manifest_digest = _sha256_digest(manifest_bytes)
+    blobs = layout / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    (layout / "oci-layout").write_text(
+        '{"imageLayoutVersion":"1.0.0"}\n'
+    )
+    (layout / "index.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+                        "artifactType": PACK_ARTIFACT_TYPE,
+                        "digest": manifest_digest,
+                        "size": len(manifest_bytes),
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
+    (blobs / pack_digest.removeprefix("sha256:")).write_bytes(pack_bytes)
+    (blobs / manifest_digest.removeprefix("sha256:")).write_bytes(manifest_bytes)
+    return manifest_digest
 
 
 @pytest.mark.asyncio
@@ -222,3 +277,138 @@ async def test_previous_pack_version_is_retained_and_rollback_is_one_action(
     assert {entry["version"] for entry in manager.retained_versions()} == {"1.0.0"}
     result = await manager.rollback(BackendKind.OPS, "1.0.0")
     assert result.version == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_registry_catalog_discovers_versions_and_validates_manifest_bytes(
+    repository: RuntimeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cosign, _ = _fake_cosign(tmp_path, monkeypatch)
+    manager = _manager(repository, tmp_path, cosign)
+    pack_bytes = (DEFAULT_PACKS_PATH / "ops-networks.json").read_bytes()
+    pack = manager._load_bytes(pack_bytes)
+    manifest_bytes = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+            "artifactType": PACK_ARTIFACT_TYPE,
+            "layers": [
+                {
+                    "mediaType": PACK_LAYER_MEDIA_TYPE,
+                    "digest": _sha256_digest(pack_bytes),
+                    "size": len(pack_bytes),
+                }
+            ],
+        },
+        separators=(",", ":"),
+    ).encode()
+    manifest_digest = _sha256_digest(manifest_bytes)
+    tag = f"pack-{pack.backend.value}-{pack.version}"
+
+    class FixtureClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str, **_kwargs: object) -> httpx.Response:
+            request = httpx.Request("GET", url)
+            if url.startswith("https://ghcr.io/token"):
+                return httpx.Response(200, json={"token": "anonymous"}, request=request)
+            if url.endswith("/tags/list"):
+                return httpx.Response(
+                    200,
+                    json={"tags": [tag, "pack-proof-ignored", "v0.2.0"]},
+                    request=request,
+                )
+            if "/manifests/" in url:
+                return httpx.Response(
+                    200,
+                    content=manifest_bytes,
+                    headers={"Docker-Content-Digest": manifest_digest},
+                    request=request,
+                )
+            return httpx.Response(200, content=pack_bytes, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FixtureClient)
+
+    entries = await manager.registry_catalog()
+
+    assert len(entries) == 1
+    assert entries[0]["id"] == f"{pack.backend.value}:{pack.version}"
+    assert entries[0]["manifest_digest"] == manifest_digest
+    assert entries[0]["tool_count"] == len(pack.tools)
+
+
+@pytest.mark.asyncio
+async def test_registry_pack_keeps_offline_startup_verification_and_rollback(
+    repository: RuntimeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cosign, arguments_path = _fake_cosign(tmp_path, monkeypatch)
+    manager = _manager(repository, tmp_path, cosign)
+    original = json.loads((DEFAULT_PACKS_PATH / "ops.json").read_text())
+    first = {**original, "version": "registry-1"}
+    second = {**original, "version": "registry-2"}
+
+    async def install(document: dict[str, object]):
+        pack_bytes = json.dumps(document).encode()
+        fixture = tmp_path / f"fixture-{document['version']}"
+        manifest_digest = _write_oci_layout(fixture, pack_bytes)
+        pack = manager._load_bytes(pack_bytes)
+
+        async def catalog():
+            return (
+                {
+                    "id": f"{pack.backend.value}:{pack.version}",
+                    "backend": pack.backend.value,
+                    "version": pack.version,
+                    "reference": (
+                        f"{PACK_REGISTRY_REFERENCE}:"
+                        f"pack-{pack.backend.value}-{pack.version}"
+                    ),
+                    "manifest_digest": manifest_digest,
+                },
+            )
+
+        def save(_reference: str, destination: Path) -> None:
+            _write_oci_layout(destination, pack_bytes)
+
+        monkeypatch.setattr(manager, "registry_catalog", catalog)
+        monkeypatch.setattr(manager, "_save_oci_reference", save)
+        staged = await manager.install_from_registry(
+            f"{pack.backend.value}:{pack.version}"
+        )
+        await manager.install_staged(staged.backend, staged.digest)
+        return staged
+
+    staged_first = await install(first)
+    staged_second = await install(second)
+
+    assert manager.active_path.joinpath("ops.oci.tar").is_file()
+    assert not manager.active_path.joinpath("ops.sigstore.json").exists()
+    assert await repository.restart_required() is True
+    assert manager.verify_active_at_startup()[BackendKind.OPS] == staged_second.digest
+    arguments = arguments_path.read_text().splitlines()
+    assert arguments[0] == "verify"
+    assert "--local-image" in arguments
+    assert arguments[arguments.index("--certificate-identity") + 1] == (
+        PACK_CERTIFICATE_IDENTITY
+    )
+
+    rolled_back = await manager.rollback(BackendKind.OPS, "registry-1")
+    assert rolled_back.digest == staged_first.digest
+    assert manager.verify_active_at_startup()[BackendKind.OPS] == staged_first.digest
+
+    manager.active_path.joinpath("ops.json").write_bytes(
+        manager.active_path.joinpath("ops.json").read_bytes() + b"\n"
+    )
+    with pytest.raises(PackTrustError, match="does not match"):
+        manager.verify_active_at_startup()

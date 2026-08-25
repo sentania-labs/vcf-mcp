@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -61,7 +62,9 @@ DEFAULT_PUBLIC_BASE_URL = "http://localhost:8000"
 DEFAULT_SKILLS_PATH = Path("/app/skills")
 
 
-def create_production_app() -> Starlette:
+def create_production_app(
+    *, restart_requester: Callable[[], None] | None = None
+) -> Starlette:
     """Build durable dependencies and wire the production ASGI application."""
 
     logging.basicConfig(
@@ -214,6 +217,12 @@ def create_production_app() -> Starlette:
         except Exception:
             LOGGER.exception("authenticated MCP surface could not be built")
 
+    if mcp_surfaces is not None:
+        try:
+            runtime_repository.set_restart_required_at_startup(False)
+        except Exception:
+            LOGGER.exception("pending restart state could not be cleared")
+
     return create_app(
         audit_repository=audit_repository,
         session_secret=session_secret,
@@ -224,4 +233,5 @@ def create_production_app() -> Starlette:
         mcp_ready=mcp_surfaces is not None,
         session_https_only=public_base_url.lower().startswith("https://"),
         pack_trust_manager=pack_trust_manager,
+        restart_requester=restart_requester,
     )
