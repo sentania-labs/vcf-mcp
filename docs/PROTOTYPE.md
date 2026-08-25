@@ -25,7 +25,7 @@ project rename:
 The historical records under `docs/decisions`, `docs/artifacts`, and
 `docs/history` retain the former project name exactly as written. Rewriting
 those records would falsify their contemporary context. The pull request body
-reports 123 changed files and 52 historical files containing the former name
+reports 124 changed files and 52 historical files containing the former name
 that were deliberately left unchanged.
 
 Product endpoints remain frozen for a process lifetime. Signed pack installs
