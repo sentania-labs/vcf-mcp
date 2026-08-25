@@ -8,9 +8,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.admin import auth
-from vcf_ops_mcp.admin.routes import admin_routes
-from vcf_ops_mcp.app import StructuralAuditMiddleware
+from vcf_mcp.admin import auth
+from vcf_mcp.admin.routes import admin_routes
+from vcf_mcp.app import StructuralAuditMiddleware
 
 
 def create_admin_app(audit_writable: bool = True):

@@ -1,7 +1,7 @@
 # Phase 1 consensus build spec
 
 Round 3 synthesis. This is the agreed design for the Phase 1 read-only build of
-vcf-ops-mcp. It is a specification, not code: nothing in it has been
+vcf-mcp. It is a specification, not code: nothing in it has been
 implemented. It is the deliverable of GitHub issue #2 and it waits for the
 principal's approval there.
 
@@ -18,7 +18,7 @@ generalization), 008 (alerts read-only in the MVP).
 
 ## 1. Shape
 
-One Python 3.12 package `src/vcf_ops_mcp/` in one container, one uvicorn
+One Python 3.12 package `src/vcf_mcp/` in one container, one uvicorn
 process, one Starlette parent app mounting three children:
 
 - FastMCP's `streamable_http_app()` at `/mcp`, Streamable HTTP, API-key auth
@@ -484,7 +484,7 @@ Two workflows, fork-gated per the constitution, on self-hosted runners. CI on PR
 and push runs lint, tiers 1 and 2, the fixture scanner, the fixture-freshness
 check, and the skills index exact-regeneration check. Release on merge to `main`
 builds one multi-stage image and pushes
-`ghcr.io/sentania-labs/vcf-ops-mcp:<sha>`, then deploys the pinned digest to the
+`ghcr.io/sentania-labs/vcf-mcp:<sha>`, then deploys the pinned digest to the
 docker.int slot using the onboarded slot's forced-command key from repo Actions
 secrets, per the `ai-log-depot` standard and the lab-container-host contract's
 multi-tenant slot model.
@@ -498,7 +498,7 @@ are pinned; `:latest` never appears in compose.
 ## 15. Gate 1
 
 Gate 1 is the principal connecting Claude Code to
-`https://vcf-ops-mcp.int.sentania.net` with a minted read-only key and running
+`https://vcf-mcp.int.sentania.net` with a minted read-only key and running
 read queries against DEVEL. The review packet carries, as named items:
 
 1. One tool call from every implemented family, with the corresponding audit row

@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex; justify-content:space-between; gap:1rem; align-items:center">
+  <div>
+    <h1>VCF backend estate</h1>
+    <p class="muted">Register a product backend, edit its trust and credentials, then mint endpoint-scoped keys. Actions are not implemented.</p>
+  </div>
+  <form method="post" action="/admin/logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Sign out</button>
+  </form>
+</div>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card notice">
+  <h2>Startup-frozen endpoints</h2>
+  <p>Backend tools are derived from registrations at process start. After adding the first target for a product, restart the container to activate its endpoint. Removing runtime loading keeps the dispatcher boundary fixed.</p>
+  <div class="endpoint-grid">
+    <div><code>/vcf/mcp</code><br><span class="badge good">management</span></div>
+    {% for pack in backend_packs %}
+    <div><code>/{{ pack.endpoint }}/mcp</code><br><span class="badge {{ 'good' if pack.endpoint in wired_endpoints else '' }}">{{ 'wired' if pack.endpoint in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', pack.backend.value)|list else 'not registered' }}</span></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card" style="margin-top:1rem">
+  <h2>Authorization mode: {{ authorization_mode.value }}</h2>
+  {% if authorization_mode.value == "gateway" %}
+  <p class="warning">Gateway mode requires network isolation or mutual TLS so only the gateway can reach this appliance. This interface cannot verify that boundary. Audit records name the gateway key and correlation ID, not the downstream agent.</p>
+  {% else %}
+  <p class="muted">Local mode uses independently owned keys with explicit endpoint and tool scopes. New keys default to no tool scopes.</p>
+  {% endif %}
+  <form method="post" action="/admin/authorization-mode">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="authorization_mode">Mode</label>
+    <select id="authorization_mode" name="authorization_mode">
+      <option value="local" {% if authorization_mode.value == "local" %}selected{% endif %}>Local scoped keys</option>
+      <option value="gateway" {% if authorization_mode.value == "gateway" %}selected{% endif %}>Gateway registrations</option>
+    </select>
+    <p class="warning">Changing mode immediately revokes every active key.</p>
+    <button type="submit">Change mode and revoke active keys</button>
+  </form>
+</section>
+
+<div class="grid" style="margin-top:1rem">
+  <section class="card">
+    <h2>Register backend target</h2>
+    <p class="muted">TLS verification starts disabled and is labelled that way. Upload a trusted root CA before enabling verification.</p>
+    <form method="post" action="/admin/targets" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="backend">Product</label>
+      <select id="backend" name="backend">
+        {% for pack in backend_packs %}
+        <option value="{{ pack.backend.value }}">{{ pack.product }}</option>
+        {% endfor %}
+      </select>
+      <label for="name">Display name</label>
+      <input id="name" name="name" required>
+      <label for="fqdn">Appliance endpoint (FQDN)</label>
+      <input id="fqdn" name="fqdn" placeholder="appliance.example.internal" required>
+      <label for="username">Service-account username</label>
+      <input id="username" name="username" autocomplete="off" required>
+      <label for="password">Service-account password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" required>
+      <label for="auth_source">Authentication source (when required)</label>
+      <select id="auth_source" name="auth_source">
+        <option value="LOCAL">Local users (LOCAL)</option>
+      </select>
+      <label for="root_ca">Root CA bundle (PEM)</label>
+      <input id="root_ca" name="root_ca" type="file" accept=".pem,.crt,text/plain,application/x-pem-file">
+      <label><input type="checkbox" name="verify_ssl"> Enable TLS certificate verification</label>
+      <p class="warning">Default: certificate verification disabled. Credentials can be intercepted on an untrusted network until this is enabled.</p>
+      <button type="submit">Register read-only target</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Mint MCP API key</h2>
+    {% if authorization_mode.value == "gateway" %}
+    <p class="muted">Choose one endpoint registration. The server grants every implemented scope and all usable targets for that endpoint, and refuses a second active key for it.</p>
+    {% else %}
+    <p class="muted">Choose endpoint access, optional target restrictions, and explicit tool scopes. Selecting no scope creates a default-deny key.</p>
+    {% endif %}
+    <form method="post" action="/admin/keys">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="label">Key label</label>
+      <input id="label" name="label" required>
+      <fieldset>
+        <legend>Allowed endpoints</legend>
+        {% for endpoint in endpoint_names %}
+        <label><input type="{{ 'radio' if authorization_mode.value == 'gateway' else 'checkbox' }}" name="endpoint" value="{{ endpoint }}"> /{{ endpoint }}/mcp</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>Granted tool scopes</legend>
+        {% if authorization_mode.value == "gateway" %}<p class="muted">All implemented scopes are granted automatically.</p>{% endif %}
+        {% for scope in grantable_scopes %}
+        <label><input type="checkbox" name="scope" value="{{ scope }}" {% if authorization_mode.value == "gateway" %}disabled{% endif %}> {{ scope }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>Allowed targets</legend>
+        {% for target in targets %}
+        <label><input type="checkbox" name="target_id" value="{{ target.id }}" {% if authorization_mode.value == "gateway" %}disabled{% endif %}> {{ target.name }} ({{ target.backend.value }})</label>
+        {% else %}
+        <p class="muted">Register a target first.</p>
+        {% endfor %}
+      </fieldset>
+      <button type="submit">Mint {{ 'gateway registration' if authorization_mode.value == 'gateway' else 'local scoped' }} key</button>
+    </form>
+  </section>
+</div>
+
+<section style="margin-top:1rem">
+  <h2>Targets</h2>
+  {% for target in targets %}
+  <details class="card target-card" {% if loop.first %}open{% endif %}>
+    <summary>
+      <strong>{{ target.name }}</strong>
+      <span class="badge">{{ target.backend.value }}</span>
+      <span class="badge {{ 'good' if target.verify_ssl else 'bad' }}">{{ 'TLS verified' if target.verify_ssl else 'TLS verification disabled' }}</span>
+      {% if target.auth_locked %}<span class="badge bad">authentication locked</span>{% endif %}
+      {% if not target.is_usable %}<span class="badge bad">credential integrity failed</span>{% endif %}
+    </summary>
+    <form method="post" action="/admin/targets/{{ target.id }}" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="configuration_generation" value="{{ target.configuration_generation }}">
+      <div class="grid compact">
+        <div>
+          <label>Product</label>
+          <input value="{{ backend_products[target.backend.value] }}" disabled>
+        </div>
+        <div>
+          <label for="name-{{ target.id }}">Display name</label>
+          <input id="name-{{ target.id }}" name="name" value="{{ target.name }}" required>
+        </div>
+        <div>
+          <label for="fqdn-{{ target.id }}">Appliance endpoint (FQDN)</label>
+          <input id="fqdn-{{ target.id }}" name="fqdn" value="{{ target.fqdn }}" required>
+        </div>
+        <div>
+          <label for="posture-{{ target.id }}">Posture</label>
+          <select id="posture-{{ target.id }}" name="posture">
+            <option value="read_only" {% if target.posture.value == "read_only" %}selected{% endif %}>Read only</option>
+            <option value="actions_enabled" {% if target.posture.value == "actions_enabled" %}selected{% endif %}>Actions enabled (requires signed active packs)</option>
+          </select>
+        </div>
+        <div>
+          <label for="username-{{ target.id }}">New username (optional)</label>
+          <input id="username-{{ target.id }}" name="username" autocomplete="off">
+        </div>
+        <div>
+          <label for="password-{{ target.id }}">New password (optional)</label>
+          <input id="password-{{ target.id }}" name="password" type="password" autocomplete="new-password">
+        </div>
+        <div>
+          <label for="auth-{{ target.id }}">Authentication source (when required)</label>
+          <select id="auth-{{ target.id }}" name="auth_source">
+            <option value="LOCAL" selected>Local users (LOCAL)</option>
+          </select>
+        </div>
+        <div>
+          <label for="ca-{{ target.id }}">Replace root CA bundle (PEM)</label>
+          <input id="ca-{{ target.id }}" name="root_ca" type="file" accept=".pem,.crt,text/plain,application/x-pem-file">
+          <label><input type="checkbox" name="clear_root_ca"> Remove stored root CA{% if target.has_custom_ca %} (currently present){% endif %}</label>
+        </div>
+      </div>
+      <label><input type="checkbox" name="verify_ssl" {% if target.verify_ssl %}checked{% endif %}> Enable TLS certificate verification for this backend</label>
+      <p class="muted">Enabling verification or replacing trust material cancels in-flight requests immediately. Other edits drain and discard superseded results.</p>
+      {% if not target.is_usable %}<p class="warning">This target is quarantined. Supply both credentials and replace or remove the stored root CA before it can return to service.</p>{% endif %}
+      {% if target.is_prod %}<p class="warning">Production identity is derived from this FQDN and remains read-only.</p>{% endif %}
+      <button type="submit">Save target changes</button>
+    </form>
+    {% if target.auth_locked %}
+    <form method="post" action="/admin/targets/{{ target.id }}/auth-unlock">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <p class="warning">Authentication was locked after {{ target.auth_failure_count }} consecutive failures. Verify the credential and auth source before clearing it.</p>
+      <button type="submit">Clear authentication lock</button>
+    </form>
+    {% endif %}
+  </details>
+  {% else %}
+  <div class="card muted">No targets registered.</div>
+  {% endfor %}
+</section>
+
+<section class="card" style="margin-top:1rem">
+  <h2>API keys</h2>
+  <table>
+    <thead><tr><th>Label</th><th>ID</th><th>Endpoints</th><th>Scopes</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for api_key in api_keys %}
+      <tr>
+        <td>{{ api_key.label }}</td>
+        <td><code>{{ api_key.key_id }}</code></td>
+        <td>{{ api_key.allowed_endpoints|join(", ") }}</td>
+        <td>{{ api_key.scopes|join(", ") }}</td>
+        <td>{{ "revoked" if api_key.revoked else "active" }}</td>
+        <td>
+          {% if not api_key.revoked %}
+          <form class="inline" method="post" action="/admin/keys/revoke">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="key_id" value="{{ api_key.key_id }}">
+            <button class="danger" type="submit">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">No API keys minted.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card" style="margin-top:1rem">
+  <h2>Credential key rotation</h2>
+  {% if rotation_status %}
+  <p>{{ rotation_status.state }}: {{ rotation_status.rotated_targets }} of {{ rotation_status.total_targets }} usable targets re-encrypted.</p>
+  {% else %}
+  <p class="muted">No rotation has been started.</p>
+  {% endif %}
+  <form method="post" action="/admin/credential-rotation">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">{{ 'Continue rotation' if rotation_status and rotation_status.state == 'running' else 'Start credential key rotation' }}</button>
+  </form>
+</section>
+
+<section class="card" style="margin-top:1rem">
+  <h2>Backend pack trust</h2>
+  <p class="muted">A signed pack and its Sigstore bundle can be uploaded while disconnected. Verification pins the release workflow identity and GitHub issuer. Installation is staged for activation on restart, and the prior version is retained.</p>
+  {% if unsigned_packs_allowed %}
+  <p class="warning">Unsigned pack installation is enabled persistently. It is refused whenever any target permits actions.</p>
+  {% endif %}
+  {% if active_unsigned_packs %}
+  <p class="warning">Unsigned packs are active for: {{ active_unsigned_packs|join(", ") }}. Actions remain unavailable until signed replacements activate after restart.</p>
+  {% endif %}
+  <form method="post" action="/admin/packs/install" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="pack">Pack JSON</label>
+    <input id="pack" name="pack" type="file" accept=".json,application/json" required>
+    <label for="bundle">Sigstore bundle (required unless unsigned policy is enabled)</label>
+    <input id="bundle" name="bundle" type="file" accept=".json,application/json">
+    <button type="submit">Verify and stage pack</button>
+  </form>
+  <form method="post" action="/admin/packs/feed/check">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Check pinned pack feed</button>
+  </form>
+  {% if pack_feed_entries %}
+  <table>
+    <thead><tr><th>Backend</th><th>Installed</th><th>Available</th><th>Tool count</th><th>Estimated tokens</th><th></th></tr></thead>
+    <tbody>
+    {% for entry in pack_feed_entries %}
+    <tr><td>{{ entry.backend }}</td><td>{{ installed_pack_versions.get(entry.backend, "not installed") }}</td><td>{{ entry.version }}</td><td>{{ entry.tool_count }}</td><td>{{ entry.estimated_definition_tokens }}</td><td><form class="inline" method="post" action="/admin/packs/feed/install"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entry_id" value="{{ entry.id }}"><button type="submit">Verify and stage</button></form></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <form method="post" action="/admin/packs/policy">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label><input type="checkbox" name="unsigned_packs_allowed" {% if unsigned_packs_allowed %}checked{% endif %}> Allow unsigned packs</label>
+    <button type="submit">Save unsigned-pack policy</button>
+  </form>
+  <form method="post" action="/admin/packs/trust-root/refresh">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p class="muted">Trust-root refresh uses the fixed Sigstore URL compiled into this build. The refreshed copy is stored on the persistent data volume and takes precedence over the immutable image copy. No operator URL is accepted.</p>
+    <button type="submit">Refresh pack trust root</button>
+  </form>
+  {% if retained_pack_versions %}
+  <h3>Retained versions</h3>
+  {% for retained in retained_pack_versions %}
+  <form class="inline" method="post" action="/admin/packs/rollback">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="backend" value="{{ retained.backend }}">
+    <input type="hidden" name="version" value="{{ retained.version }}">
+    <button type="submit">Rollback {{ retained.backend }} to {{ retained.version }}</button>
+  </form>
+  {% endfor %}
+  {% endif %}
+</section>
+
+<section class="card" style="margin-top:1rem">
+  <h2>Recent configuration audit</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for event in configuration_events %}
+    <tr><td>{{ event.created_at }}</td><td>{{ event.event_type }}</td><td><code>{{ event.details }}</code></td></tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">No configuration changes recorded.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

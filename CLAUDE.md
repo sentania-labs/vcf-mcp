@@ -1,11 +1,11 @@
-# CLAUDE.md, vcf-ops-mcp
+# CLAUDE.md, vcf-mcp
 
-Constitution for vcf-ops-mcp. Every agent working in this repo must honor
+Constitution for vcf-mcp. Every agent working in this repo must honor
 these rules.
 
 ## Project overview
 
-vcf-ops-mcp is a container-based MCP server plus a small admin web UI for
+vcf-mcp is a container-based MCP server plus a small admin web UI for
 VCF Operations (the Aria Operations / vRealize Operations lineage). It
 exposes the VCF Ops suite-api as MCP tools over Streamable HTTP with
 API-key auth: inventory/resources, metrics and super metrics, alerts and
@@ -104,3 +104,10 @@ worktree ahead of the decision. CI builds one container image to
 `ghcr.io/sentania-labs/vcf-mcp` on self-hosted runners and deploys to
 the docker.int slot; deployment configuration (which is not credentials)
 lives in repo Actions secrets per the CI-native standard.
+
+## Maintaining this file
+
+Keep this file limited to durable project guidance that applies to nearly every
+future session. Prefer pointers to authoritative code, decisions, and commands
+over duplicated implementation detail. Re-run `tools/generate_agents_md.sh`
+after every change so `AGENTS.md` remains the generated twin.

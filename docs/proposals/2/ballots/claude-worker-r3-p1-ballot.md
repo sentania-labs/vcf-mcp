@@ -1,6 +1,6 @@
 # Round 3 phase 3 ballot, claude-worker
 
-- **Round:** vcf-ops-mcp Phase 1 build synthesis
+- **Round:** vcf-mcp Phase 1 build synthesis
 - **Author:** claude-worker
 - **Artifacts read:** all six, at the SHAs named in the dispatch.
 - **Recon:** none taken this phase. Nothing below turns on a fact the

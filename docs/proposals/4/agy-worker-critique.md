@@ -3,7 +3,7 @@
 ## 1. Where `permissions:` goes
 **Steelman for Claude-worker:** Putting `permissions:` at the workflow level applies a straightforward, centralized configuration that matches known-good patterns like `hearthgate`, reducing the risk of missing it if jobs are refactored.
 **Steelman for Codex-worker:** Scoping `permissions:` strictly to the `deploy` job adheres to least privilege, avoiding giving `packages: write` to the `test` job.
-**Critique:** Claude's argument that workflow-level `permissions` is a net reduction for the `test` job is factually wrong. Running `gh api repos/sentania-labs/vcf-ops-mcp/actions/permissions/workflow` confirms the repo's `default_workflow_permissions` is `read`. Therefore, the `test` job currently runs with only `contents: read`. Adding `packages: write` at the workflow level actively expands the `test` job's permissions for no reason. Codex is correct here; the permissions must be scoped strictly to the `deploy` job.
+**Critique:** Claude's argument that workflow-level `permissions` is a net reduction for the `test` job is factually wrong. Running `gh api repos/sentania-labs/vcf-mcp/actions/permissions/workflow` confirms the repo's `default_workflow_permissions` is `read`. Therefore, the `test` job currently runs with only `contents: read`. Adding `packages: write` at the workflow level actively expands the `test` job's permissions for no reason. Codex is correct here; the permissions must be scoped strictly to the `deploy` job.
 
 ## 2. The missing secrets
 **Steelman for Claude-worker:** Adding a preflight step to loudly check for required secrets (`DEPLOY_HOST`, `SERVICE_URL`, `DOCKER_DEPLOY_KEY`) prevents the workflow from failing silently or executing malformed SSH commands.

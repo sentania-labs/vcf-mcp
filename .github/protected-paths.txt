@@ -1,4 +1,4 @@
-# Protected paths, vcf-ops-mcp.
+# Protected paths, vcf-mcp.
 #
 # Single source of truth for which paths require a signed consensus
 # decision record (docs/decisions/NNN-*.md) before a PR touching them can
@@ -17,7 +17,7 @@ AGENTS.md
 # Safety-critical server core once it exists: target registry, credential
 # store, action gating/plan-then-apply, audit log. A unilateral change
 # here can silently weaken the read-only default or the prod hard-block.
-src/vcf_ops_mcp/
+src/vcf_mcp/
 
 # The team framework surface.
 roles/

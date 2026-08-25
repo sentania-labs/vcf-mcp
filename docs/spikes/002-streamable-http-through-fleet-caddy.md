@@ -4,14 +4,14 @@
 
 ## Question 1: Do the lab handoff facts exist yet?
 No, they are incomplete.
-* **DNS Resolution:** Yes. `vcf-ops-mcp.int.sentania.net` successfully resolves to the proxy host (`docker-proxy.int.sentania.net` / `172.16.3.33`).
-* **Docker Slot:** The directory for the slot's configuration exists inside the Caddy container (`/etc/caddy/conf.d/vcf-ops-mcp`), but it is entirely empty.
+* **DNS Resolution:** Yes. `vcf-mcp.int.sentania.net` successfully resolves to the proxy host (`docker-proxy.int.sentania.net` / `172.16.3.33`).
+* **Docker Slot:** The directory for the slot's configuration exists inside the Caddy container (`/etc/caddy/conf.d/vcf-mcp`), but it is entirely empty.
 * **Fleet-Caddy Config:** **Missing.** Because the per-slot Caddy config is absent, the proxy drops connections to this host during the TLS handshake (`SSL_ERROR_SYSCALL` upon Client Hello).
 
 Evidence gathered:
-* `dig vcf-ops-mcp.int.sentania.net` successfully resolved the CNAME to `docker-proxy.int.sentania.net`.
-* `curl -vI https://vcf-ops-mcp.int.sentania.net` successfully connects on port 443 but immediately drops the connection during the TLS handshake.
-* Connecting to the docker host directly and inspecting the `fleet-caddy` container (`docker exec fleet-caddy ls -la /etc/caddy/conf.d/vcf-ops-mcp`) confirmed the configuration directory is completely empty.
+* `dig vcf-mcp.int.sentania.net` successfully resolved the CNAME to `docker-proxy.int.sentania.net`.
+* `curl -vI https://vcf-mcp.int.sentania.net` successfully connects on port 443 but immediately drops the connection during the TLS handshake.
+* Connecting to the docker host directly and inspecting the `fleet-caddy` container (`docker exec fleet-caddy ls -la /etc/caddy/conf.d/vcf-mcp`) confirmed the configuration directory is completely empty.
 
 ## Streamable HTTP Behavior (Buffering, Idle Timeout, Header Forwarding)
 **Not tested.**

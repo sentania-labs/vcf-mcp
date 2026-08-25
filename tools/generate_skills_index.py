@@ -11,9 +11,9 @@ import os
 import sys
 from pathlib import Path
 
-# Add src to sys.path to import vcf_ops_mcp
+# Add src to sys.path to import vcf_mcp
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from vcf_ops_mcp.skills import build_index_data
+from vcf_mcp.skills import build_index_data
 
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 INDEX_PATH = SKILLS_DIR / "index.json"

@@ -20,12 +20,12 @@ import httpx
 import pytest
 
 from tests.live.guard import OutsideTheReadSet, refuse_outside_the_read_set
-from vcf_ops_mcp.vcf.adapters import alerts, inventory
-from vcf_ops_mcp.vcf.adapters import metrics as metrics_adapters
-from vcf_ops_mcp.vcf.adapters import reports as reports_adapters
-from vcf_ops_mcp.vcf.caps import MAX_METRICS_RESOURCES, samples_in_window
-from vcf_ops_mcp.vcf.client import SUITE_API_ROOT, TOKEN_ACQUIRE_PATH
-from vcf_ops_mcp.vcf.errors import OutboundContractViolation, ResultCapExceeded
+from vcf_mcp.vcf.adapters import alerts, inventory
+from vcf_mcp.vcf.adapters import metrics as metrics_adapters
+from vcf_mcp.vcf.adapters import reports as reports_adapters
+from vcf_mcp.vcf.caps import MAX_METRICS_RESOURCES, samples_in_window
+from vcf_mcp.vcf.client import SUITE_API_ROOT, TOKEN_ACQUIRE_PATH
+from vcf_mcp.vcf.errors import OutboundContractViolation, ResultCapExceeded
 
 
 pytestmark = pytest.mark.live

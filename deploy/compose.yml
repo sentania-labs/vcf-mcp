@@ -1,18 +1,18 @@
-# Reference slot compose file for lab-owned deployment of vcf-ops-mcp.
-# The lab deployment supplies VCF_OPS_MCP_IMAGE as a pinned version or digest.
+# Reference slot compose file for lab-owned deployment of vcf-mcp.
+# The lab deployment supplies VCF_MCP_IMAGE as a pinned version or digest.
 # Runtime secrets are generated or consumed on the mounted /keys volume and
 # never need a deploy-time environment value.
 #
 # TLS is not configured here and must not be. fleet-caddy terminates TLS at the
-# edge for vcf-ops-mcp.int.sentania.net and reaches this container over plain
+# edge for vcf-mcp.int.sentania.net and reaches this container over plain
 # HTTP on the shared docker-slots network.
 services:
-  vcf-ops-mcp-web:
-    image: ${VCF_OPS_MCP_IMAGE:?VCF_OPS_MCP_IMAGE must be set}
+  vcf-mcp-web:
+    image: ${VCF_MCP_IMAGE:?VCF_MCP_IMAGE must be set}
     restart: unless-stopped
     read_only: true
     environment:
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://vcf-ops-mcp.int.sentania.net}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://vcf-mcp.int.sentania.net}
     networks: [docker-slots]
     deploy:
       resources:
@@ -30,6 +30,8 @@ services:
       - app_data:/data
       - credential_store:/keys
       - audit_log:/audit
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)"]
       interval: 15s

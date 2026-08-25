@@ -1,6 +1,6 @@
 import unittest
 
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.contracts import (
     MUTATING,
     NO_PAYLOAD,
     REGISTRATION_SCHEMA_VERSION,

@@ -3,9 +3,9 @@
 Tier 3 per SPEC section 11. Never runs in CI. Run it by hand at every gate and
 after every appliance upgrade:
 
-    VCF_OPS_LIVE=1 \\
-    VCF_OPS_LIVE_HOST=vcf-lab-operations-devel.int.sentania.net \\
-    VCF_OPS_LIVE_CREDENTIALS_FILE=/path/outside/the/repo/creds.txt \\
+    VCF_MCP_LIVE=1 \\
+    VCF_MCP_LIVE_HOST=vcf-lab-operations-devel.int.sentania.net \\
+    VCF_MCP_LIVE_CREDENTIALS_FILE=/path/outside/the/repo/creds.txt \\
     PYTHONPATH=src python3 -m pytest tests/live -m live
 
 Credentials come from the environment or from a file outside the repository
@@ -22,14 +22,14 @@ import httpx
 import pytest
 
 from tests.live.guard import assert_host_is_permitted, refuse_outside_the_read_set
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.contracts import (
     ConfigurationGeneration,
     TargetId,
     TargetPosture,
     TargetRecord,
 )
-from vcf_ops_mcp.vcf.adapters import READ_ALLOWLIST
-from vcf_ops_mcp.vcf.client import SUITE_API_ROOT, TargetCredentials, VcfTargetClient
+from vcf_mcp.vcf.adapters import READ_ALLOWLIST
+from vcf_mcp.vcf.client import SUITE_API_ROOT, TargetCredentials, VcfTargetClient
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -41,10 +41,10 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    if os.environ.get("VCF_OPS_LIVE") == "1":
+    if os.environ.get("VCF_MCP_LIVE") == "1":
         return
     skip = pytest.mark.skip(
-        reason="live tier is opt-in: set VCF_OPS_LIVE=1 and VCF_OPS_LIVE_HOST"
+        reason="live tier is opt-in: set VCF_MCP_LIVE=1 and VCF_MCP_LIVE_HOST"
     )
     for item in items:
         if "live" in item.keywords:
@@ -78,28 +78,28 @@ def _credentials_from_file(path: str, section: str) -> tuple[str, str]:
 def live_host() -> str:
     """The configured host, refused unless it is on the allowlist."""
 
-    configured = os.environ.get("VCF_OPS_LIVE_HOST")
+    configured = os.environ.get("VCF_MCP_LIVE_HOST")
     if not configured:
-        pytest.skip("VCF_OPS_LIVE_HOST is not set")
+        pytest.skip("VCF_MCP_LIVE_HOST is not set")
     return assert_host_is_permitted(configured)
 
 
 @pytest.fixture(scope="session")
 def live_credentials() -> TargetCredentials:
-    username = os.environ.get("VCF_OPS_LIVE_USERNAME")
-    password = os.environ.get("VCF_OPS_LIVE_PASSWORD")
+    username = os.environ.get("VCF_MCP_LIVE_USERNAME")
+    password = os.environ.get("VCF_MCP_LIVE_PASSWORD")
     if not (username and password):
-        path = os.environ.get("VCF_OPS_LIVE_CREDENTIALS_FILE")
+        path = os.environ.get("VCF_MCP_LIVE_CREDENTIALS_FILE")
         if not path:
             pytest.skip(
-                "set VCF_OPS_LIVE_USERNAME and VCF_OPS_LIVE_PASSWORD, or "
-                "VCF_OPS_LIVE_CREDENTIALS_FILE"
+                "set VCF_MCP_LIVE_USERNAME and VCF_MCP_LIVE_PASSWORD, or "
+                "VCF_MCP_LIVE_CREDENTIALS_FILE"
             )
         username, password = _credentials_from_file(
-            path, os.environ.get("VCF_OPS_LIVE_SECTION", "DEVEL")
+            path, os.environ.get("VCF_MCP_LIVE_SECTION", "DEVEL")
         )
     return TargetCredentials(
-        username, password, os.environ.get("VCF_OPS_LIVE_AUTH_SOURCE", "LOCAL")
+        username, password, os.environ.get("VCF_MCP_LIVE_AUTH_SOURCE", "LOCAL")
     )
 
 

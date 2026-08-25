@@ -18,8 +18,8 @@ import re
 
 import httpx
 
-from vcf_ops_mcp.vcf.adapters import READ_ALLOWLIST
-from vcf_ops_mcp.vcf.client import (
+from vcf_mcp.vcf.adapters import READ_ALLOWLIST
+from vcf_mcp.vcf.client import (
     SUITE_API_ROOT,
     TOKEN_ACQUIRE_PATH,
     TOKEN_RELEASE_PATH,

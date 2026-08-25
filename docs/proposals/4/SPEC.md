@@ -1,6 +1,6 @@
 # Round 4 spec: repair the post-merge deploy path
 
-Issue: sentania-labs/vcf-ops-mcp#4. Round branch `round/4-deploy-permissions`.
+Issue: sentania-labs/vcf-mcp#4. Round branch `round/4-deploy-permissions`.
 Lane: full protocol, three doers. This document is the converged team position.
 The per-worker proposals, critiques, and ballots it was synthesized from are in
 this directory and are cited by SHA in `docs/decisions/011-deploy-path-repair.md`.
@@ -19,14 +19,14 @@ three-line block is the correct fix.
 
 Wrong: "this permissions gap is the only thing between merged code and a
 running service." Five defects sit between `main` today and a 200 from
-`https://vcf-ops-mcp.int.sentania.net/healthz`. Every finding below was
+`https://vcf-mcp.int.sentania.net/healthz`. Every finding below was
 established by read-only recon and independently reproduced by at least two
 residents, and the orchestrator re-ran the load-bearing ones itself.
 
 ### D1. Missing `permissions:`. Confirmed. This is the one the issue names.
 
 The repository's `default_workflow_permissions` is `read`
-(`gh api repos/sentania-labs/vcf-ops-mcp/actions/permissions/workflow`), so no
+(`gh api repos/sentania-labs/vcf-mcp/actions/permissions/workflow`), so no
 job in this workflow can currently write anything, including packages.
 
 ### D2. Three of the four secrets the deploy step reads do not exist. Confirmed, and fatal on its own.
@@ -40,7 +40,7 @@ to this repo: `AWS_*`, `DNS_SERVER`, `DOCKER_HUB_*`, `KRB*`,
 three referenced names exists at either level.
 
 So on the first run that gets past D1, the deploy step writes a newline to the
-key file, runs `ssh -i <empty key> deploy@ vcf-ops-mcp get-digest` against a
+key file, runs `ssh -i <empty key> deploy@ vcf-mcp get-digest` against a
 host literally named `deploy@`, swallows that failure through `|| echo "none"`,
 and dies on the next unguarded `ssh` under `bash -e`. Criterion one ("slot
 deploy executed") fails on the very next attempt after D1 is fixed, and the one
@@ -55,7 +55,7 @@ is part of this spec rather than a nicety.
 
 ### D3. `/healthz` cannot return 200 from the container image, at any digest. Confirmed.
 
-`Dockerfile:38` runs `uvicorn vcf_ops_mcp.app:create_app --factory`. Uvicorn
+`Dockerfile:38` runs `uvicorn vcf_mcp.app:create_app --factory`. Uvicorn
 calls the factory with no arguments, so `audit_repository` defaults to `None`
 (`app.py:54`), `app.state.audit_repository` is `None`, and `healthz` takes the
 `else` branch at `app.py:27-34` and returns 503 unconditionally.
@@ -87,7 +87,7 @@ D3 and D4 stack. Fixing D4 alone yields a live process that answers 503.
 
 ### D5. The slot's forced-command interface is an assumption, not a verified contract. UNRESOLVED.
 
-The deploy step calls `vcf-ops-mcp get-digest` and `vcf-ops-mcp <image-ref>` as
+The deploy step calls `vcf-mcp get-digest` and `vcf-mcp <image-ref>` as
 forced-command subcommands. That verb string appears nowhere outside this
 repo's own workflow. The nearest source, `docs/proposals/2/SPEC.md:488`, says
 "the onboarded slot's forced-command key" and names no verbs.
@@ -135,8 +135,8 @@ excludes. It is Decision 3 below.
 
 Two commits in `.github/workflows/`, one file.
 
-**Commit 1: the rename alone.** `git mv ai-log-depot.yml vcf-ops-mcp.yml` plus
-`-name: ai-log-depot` / `+name: vcf-ops-mcp`. Ordered first so the substantive
+**Commit 1: the rename alone.** `git mv ai-log-depot.yml vcf-mcp.yml` plus
+`-name: ai-log-depot` / `+name: vcf-mcp`. Ordered first so the substantive
 diff in commit 2 reads as a diff rather than as a whole-file delete-and-add
 pair.
 
@@ -229,7 +229,7 @@ lands, and the team is not able to say when.
 round 3 and now.
 
 **Decision 2: the deploy-key identity, and the host/URL configuration.**
-Needed: confirmation that `DOCKER_DEPLOY_KEY` is the `vcf-ops-mcp` slot's key,
+Needed: confirmation that `DOCKER_DEPLOY_KEY` is the `vcf-mcp` slot's key,
 and creation of `DOCKER_DEPLOY_HOST` and `SERVICE_URL` as repository variables.
 The evidence that it is the right key is that it was created for this repo on
 2026-07-20 and that hearthgate uses an identically-named secret for the same
@@ -241,7 +241,7 @@ Values never enter the repo, a commit, or a transcript.
 which is the correct behavior but not a deploy.
 
 **Decision 3: what the deploy key can actually run.** A read-only question to
-lab-admin: does `vcf-ops-mcp get-digest` exist, and does the key accept a bare
+lab-admin: does `vcf-mcp get-digest` exist, and does the key accept a bare
 image reference, or is this a hearthgate-shaped general shell key expecting a
 compose file. This is the round's largest unattested assumption (D5).
 *If it is the hearthgate shape:* Slice A grows a compose file, a slot volume

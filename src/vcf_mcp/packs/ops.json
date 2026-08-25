@@ -1,0 +1,861 @@
+{
+  "schema_version": 1,
+  "id": "sentania.ops.read",
+  "version": "0.1.0-prototype",
+  "backend": "ops",
+  "endpoint": "ops",
+  "product": "VCF Operations",
+  "auth_scheme": "ops_token",
+  "api_root": "/suite-api",
+  "source": "Inherited measured contracts in docs/read-plane.md, based on the official VCF Operations OpenAPI and live read-only recon",
+  "unsigned": true,
+  "projection_keys": [
+    "id",
+    "name",
+    "key",
+    "status",
+    "type",
+    "value",
+    "values",
+    "items",
+    "count",
+    "page",
+    "pageInfo",
+    "resourceKey",
+    "resourceStatusStates",
+    "statKey",
+    "timestamps",
+    "data",
+    "links"
+  ],
+  "caps": {
+    "max_page_size": 200,
+    "metrics_cells": 5000,
+    "max_response_bytes": 8388608
+  },
+  "tools": [
+    {
+      "name": "list_adapter_kinds",
+      "summary": "List VCF Operations adapter kinds.",
+      "capability": "read:inventory",
+      "method": "GET",
+      "path": "/api/adapterkinds",
+      "projection": "adapter_kind.v1",
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_resource_kinds",
+      "summary": "List resource kinds for an adapter kind.",
+      "capability": "read:inventory",
+      "method": "GET",
+      "path": "/api/adapterkinds/{adapter_kind_key}/resourcekinds",
+      "query": [
+        "page",
+        "pageSize"
+      ],
+      "projection": "resource_kind.v1",
+      "arguments": [
+        {
+          "name": "adapter_kind_key",
+          "type": "str",
+          "required": true
+        },
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "search_resources",
+      "summary": "Search projected resources.",
+      "capability": "read:inventory",
+      "method": "GET",
+      "path": "/api/resources",
+      "query": [
+        "adapterKind",
+        "name",
+        "page",
+        "pageSize",
+        "resourceKind"
+      ],
+      "projection": "resource.v1",
+      "arguments": [
+        {
+          "name": "name",
+          "type": "str?",
+          "default": null
+        },
+        {
+          "name": "adapter_kind",
+          "type": "str?",
+          "default": null
+        },
+        {
+          "name": "resource_kind",
+          "type": "str?",
+          "default": null
+        },
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_resource",
+      "summary": "Get one projected resource.",
+      "capability": "read:inventory",
+      "method": "GET",
+      "path": "/api/resources/{resource_id}",
+      "projection": "resource.v1",
+      "arguments": [
+        {
+          "name": "resource_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "discover_stat_keys",
+      "summary": "Discover metric keys for one resource.",
+      "capability": "read:metrics",
+      "method": "GET",
+      "path": "/api/resources/{resource_id}/statkeys",
+      "projection": "stat_key.v1",
+      "arguments": [
+        {
+          "name": "resource_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_latest_stats",
+      "summary": "Read bounded latest metric values.",
+      "capability": "read:metrics",
+      "method": "GET",
+      "path": "/api/resources/stats/latest",
+      "query": [
+        "resourceId",
+        "statKey"
+      ],
+      "projection": "stats.v1",
+      "arguments": [
+        {
+          "name": "resource_ids",
+          "type": "list[str]",
+          "required": true
+        },
+        {
+          "name": "stat_keys",
+          "type": "list[str]",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_ranged_stats",
+      "summary": "Read bounded metric series for an explicit time window.",
+      "capability": "read:metrics",
+      "method": "POST",
+      "path": "/api/resources/stats/query",
+      "body": [
+        "begin",
+        "end",
+        "intervalQuantifier",
+        "intervalType",
+        "resourceId",
+        "rollUpType",
+        "statKey"
+      ],
+      "projection": "stats.v1",
+      "arguments": [
+        {
+          "name": "resource_ids",
+          "type": "list[str]",
+          "required": true
+        },
+        {
+          "name": "stat_keys",
+          "type": "list[str]",
+          "required": true
+        },
+        {
+          "name": "begin_ms",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "end_ms",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "interval_type",
+          "type": "str",
+          "default": "MINUTES"
+        },
+        {
+          "name": "interval_quantifier",
+          "type": "int",
+          "default": 5
+        },
+        {
+          "name": "roll_up_type",
+          "type": "str",
+          "default": "AVG"
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_super_metrics",
+      "summary": "List super metrics.",
+      "capability": "read:metrics",
+      "method": "GET",
+      "path": "/api/supermetrics",
+      "query": [
+        "page",
+        "pageSize"
+      ],
+      "projection": "super_metric.v1",
+      "arguments": [
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_super_metric",
+      "summary": "Get one super metric.",
+      "capability": "read:metrics",
+      "method": "GET",
+      "path": "/api/supermetrics/{super_metric_id}",
+      "projection": "super_metric.v1",
+      "arguments": [
+        {
+          "name": "super_metric_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "search_alerts",
+      "summary": "Search alerts using effective POST filters.",
+      "capability": "read:alerts",
+      "method": "POST",
+      "path": "/api/alerts/query",
+      "query": [
+        "page",
+        "pageSize"
+      ],
+      "body": [
+        "activeOnly",
+        "alertCriticality",
+        "alertDefinitionId"
+      ],
+      "projection": "alert.v1",
+      "arguments": [
+        {
+          "name": "active_only",
+          "type": "bool?",
+          "default": null
+        },
+        {
+          "name": "criticalities",
+          "type": "list[str]?",
+          "default": null
+        },
+        {
+          "name": "alert_definition_ids",
+          "type": "list[str]?",
+          "default": null
+        },
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_resource_alerts",
+      "summary": "List alerts for one resource.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/alerts",
+      "query": [
+        "page",
+        "pageSize",
+        "resourceId"
+      ],
+      "projection": "alert.v1",
+      "arguments": [
+        {
+          "name": "resource_id",
+          "type": "str",
+          "required": true
+        },
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_alert",
+      "summary": "Get one alert.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/alerts/{alert_id}",
+      "projection": "alert.v1",
+      "arguments": [
+        {
+          "name": "alert_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_alert_definitions",
+      "summary": "List alert definitions.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/alertdefinitions",
+      "query": [
+        "page",
+        "pageSize"
+      ],
+      "projection": "alert_definition.v1",
+      "arguments": [
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_alert_definition",
+      "summary": "Get one alert definition.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/alertdefinitions/{alert_definition_id}",
+      "projection": "alert_definition.v1",
+      "arguments": [
+        {
+          "name": "alert_definition_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_resource_symptoms",
+      "summary": "List symptoms for one resource.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/symptoms",
+      "query": [
+        "page",
+        "pageSize",
+        "resourceId"
+      ],
+      "projection": "symptom.v1",
+      "arguments": [
+        {
+          "name": "resource_id",
+          "type": "str",
+          "required": true
+        },
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_symptom_definitions",
+      "summary": "List symptom definitions.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/symptomdefinitions",
+      "query": [
+        "page",
+        "pageSize"
+      ],
+      "projection": "symptom_definition.v1",
+      "arguments": [
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_symptom_definition",
+      "summary": "Get one symptom definition.",
+      "capability": "read:alerts",
+      "method": "GET",
+      "path": "/api/symptomdefinitions/{symptom_definition_id}",
+      "projection": "symptom_definition.v1",
+      "arguments": [
+        {
+          "name": "symptom_definition_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "list_report_definitions",
+      "summary": "List report definitions.",
+      "capability": "read:reports",
+      "method": "GET",
+      "path": "/api/reportdefinitions",
+      "query": [
+        "page",
+        "pageSize"
+      ],
+      "projection": "report_definition.v1",
+      "arguments": [
+        {
+          "name": "page",
+          "type": "int",
+          "default": 0
+        },
+        {
+          "name": "page_size",
+          "type": "int?",
+          "default": null
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    },
+    {
+      "name": "get_report_definition",
+      "summary": "Get one report definition.",
+      "capability": "read:reports",
+      "method": "GET",
+      "path": "/api/reportdefinitions/{report_definition_id}",
+      "projection": "report_definition.v1",
+      "arguments": [
+        {
+          "name": "report_definition_id",
+          "type": "str",
+          "required": true
+        }
+      ],
+      "response_keys": [
+        "id",
+        "name",
+        "key",
+        "status",
+        "type",
+        "value",
+        "values",
+        "items",
+        "count",
+        "page",
+        "pageInfo",
+        "resourceKey",
+        "resourceStatusStates",
+        "statKey",
+        "timestamps",
+        "data",
+        "links"
+      ]
+    }
+  ]
+}

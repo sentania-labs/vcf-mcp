@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -12,11 +13,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.app import create_app
-from vcf_ops_mcp.audit import SqliteAuditRepository
-from vcf_ops_mcp.contracts import BackendKind, InvalidationMode
-from vcf_ops_mcp.mcp_server import implemented_scopes
-from vcf_ops_mcp.runtime_repository import RuntimeRepository
+from vcf_mcp.app import create_app
+from vcf_mcp.audit import SqliteAuditRepository
+from vcf_mcp.contracts import BackendKind, InvalidationMode
+from vcf_mcp.mcp_server import implemented_scopes
+from vcf_mcp.runtime_repository import RuntimeRepository
 
 
 def synthetic_ca_pem() -> str:
@@ -138,6 +139,86 @@ def test_bootstrap_login_target_registration_and_key_mint(
         audit.close()
 
 
+def test_quarantined_target_dashboard_requires_root_ca_recovery(
+    tmp_path: Path,
+) -> None:
+    bootstrap = tmp_path / "keys" / "admin_bootstrap_password"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.write_text("synthetic-bootstrap-password")
+    bootstrap.chmod(0o600)
+    database_path = tmp_path / "data" / "config.sqlite3"
+    keyring_path = tmp_path / "keys" / "credential_keyring.json"
+    runtime = RuntimeRepository(
+        database_path,
+        keyring_path,
+        grantable_scopes=implemented_scopes(),
+        bootstrap_password_path=bootstrap,
+    )
+    runtime.bootstrap()
+    damaged = asyncio.run(
+        runtime.create_target(
+            name="damaged-ca",
+            fqdn="damaged-ca.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=True,
+            root_ca_pem=synthetic_ca_pem(),
+        )
+    )
+    asyncio.run(
+        runtime.create_target(
+            name="healthy",
+            fqdn="healthy.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+        )
+    )
+    runtime.close()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE targets SET root_ca_envelope = '{\"broken\":true}' WHERE id = ?",
+            (str(damaged.id),),
+        )
+        connection.commit()
+
+    runtime = RuntimeRepository(
+        database_path,
+        keyring_path,
+        grantable_scopes=implemented_scopes(),
+        bootstrap_password_path=bootstrap,
+    )
+    runtime.bootstrap()
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            login = client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-bootstrap-password",
+                },
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            dashboard = client.get("/admin")
+            assert dashboard.status_code == 200
+            assert "replace or remove the stored root CA" in dashboard.text
+    finally:
+        runtime.close()
+        audit.close()
+
+
 def test_stale_reauth_from_a_post_round_trips_back_to_work(
     tmp_path: Path,
 ) -> None:
@@ -176,7 +257,7 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
             assert csrf is not None
 
             with mock.patch(
-                "vcf_ops_mcp.admin.auth.is_recent_reauth",
+                "vcf_mcp.admin.auth.is_recent_reauth",
                 return_value=False,
             ):
                 bounced = client.post(

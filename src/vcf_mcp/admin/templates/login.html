@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Admin sign in{% endblock %}
+{% block content %}
+<section class="card" style="max-width: 520px; margin: 0 auto">
+  <h1>Admin sign in</h1>
+  {% if bootstrap_required %}
+  <p class="notice">
+    First-run bootstrap has no default credential. Set the operator-supplied
+    admin password here. The source value is hashed immediately and is never
+    retained.
+  </p>
+  {% endif %}
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/admin/login">
+    <label for="username">Username</label>
+    <input id="username" name="username" value="admin" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="{{ 'new-password' if bootstrap_required else 'current-password' }}" required>
+    {% if bootstrap_required %}
+    <label for="password_confirmation">Confirm password</label>
+    <input id="password_confirmation" name="password_confirmation" type="password" autocomplete="new-password" required>
+    {% endif %}
+    <button type="submit">{{ 'Initialize admin' if bootstrap_required else 'Sign in' }}</button>
+  </form>
+</section>
+{% endblock %}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -22,20 +23,19 @@ from unittest import mock
 
 from starlette.testclient import TestClient
 
-from vcf_ops_mcp.app import create_app
-from vcf_ops_mcp.audit import AuditStorageUnavailable, SqliteAuditRepository
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.app import create_app
+from vcf_mcp.audit import AuditStorageUnavailable, SqliteAuditRepository
+from vcf_mcp.contracts import (
     AuditRecord,
     AuditStatus,
     CorrelationId,
     KeyId,
     TargetId,
 )
-from vcf_ops_mcp.main import create_production_app
+from vcf_mcp.main import create_production_app
+from vcf_mcp.runtime_repository import AllTargetsIntegrityFailed, RuntimeRepository
 
-SECRET_ENVIRONMENT = {
-    "SESSION_SECRET": "synthetic-test-secret-with-more-than-32-bytes"
-}
+SECRET_ENVIRONMENT = {"SESSION_SECRET": "synthetic-test-secret-with-more-than-32-bytes"}
 UVICORN_STARTUP_TIMEOUT_SECONDS = 30
 
 
@@ -60,12 +60,8 @@ class ProductionAppTests(unittest.TestCase):
     def environment(self, **extra: str) -> dict[str, str]:
         return {
             "AUDIT_DB_PATH": str(self.root / "audit" / "audit.sqlite3"),
-            "SESSION_SECRET_PATH": str(
-                self.root / "keys" / "session_secret"
-            ),
-            "AUDIT_DIGEST_KEY_PATH": str(
-                self.root / "keys" / "audit_digest_key"
-            ),
+            "SESSION_SECRET_PATH": str(self.root / "keys" / "session_secret"),
+            "AUDIT_DIGEST_KEY_PATH": str(self.root / "keys" / "audit_digest_key"),
             "CONFIG_DB_PATH": str(self.root / "data" / "config.sqlite3"),
             "CREDENTIAL_KEYRING_PATH": str(
                 self.root / "keys" / "credential_keyring.json"
@@ -73,9 +69,7 @@ class ProductionAppTests(unittest.TestCase):
             "ADMIN_BOOTSTRAP_PASSWORD_FILE": str(
                 self.root / "keys" / "admin_bootstrap_password"
             ),
-            "SKILLS_PATH": str(
-                Path(__file__).resolve().parents[1] / "skills"
-            ),
+            "SKILLS_PATH": str(Path(__file__).resolve().parents[1] / "skills"),
             "PUBLIC_BASE_URL": "http://testserver",
             **extra,
         }
@@ -97,6 +91,38 @@ class ProductionAppTests(unittest.TestCase):
             create_production_app()
         self.assertTrue(path.exists())
 
+    def test_all_target_integrity_failure_refuses_startup(self) -> None:
+        environment = self.environment()
+        repository = RuntimeRepository(
+            Path(environment["CONFIG_DB_PATH"]),
+            Path(environment["CREDENTIAL_KEYRING_PATH"]),
+            grantable_scopes=frozenset(),
+            bootstrap_password_path=Path(environment["ADMIN_BOOTSTRAP_PASSWORD_FILE"]),
+        )
+        repository.bootstrap()
+        target = asyncio.run(
+            repository.create_target(
+                name="integrity-failed",
+                fqdn="integrity-failed.example.internal",
+                username="synthetic-reader",
+                password="synthetic-password",
+                auth_source="LOCAL",
+                verify_ssl=False,
+            )
+        )
+        repository.close()
+        with sqlite3.connect(environment["CONFIG_DB_PATH"]) as connection:
+            connection.execute(
+                "UPDATE targets SET password_envelope = '{\"broken\":true}'"
+                " WHERE id = ?",
+                (str(target.id),),
+            )
+            connection.commit()
+
+        with mock.patch.dict(os.environ, environment, clear=True):
+            with self.assertRaises(AllTargetsIntegrityFailed):
+                create_production_app()
+
     def test_boot_reconciles_attempts_left_open_by_a_prior_process(
         self,
     ) -> None:
@@ -117,9 +143,7 @@ class ProductionAppTests(unittest.TestCase):
     def test_an_unopenable_store_boots_degraded_and_answers_503(self) -> None:
         blocker = self.root / "blocker"
         blocker.write_text("not a directory")
-        environment = self.environment(
-            AUDIT_DB_PATH=str(blocker / "audit.sqlite3")
-        )
+        environment = self.environment(AUDIT_DB_PATH=str(blocker / "audit.sqlite3"))
         with mock.patch.dict(os.environ, environment, clear=False):
             app = create_production_app()
             with TestClient(app) as client:
@@ -161,9 +185,7 @@ class ProductionAppTests(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.get("/healthz")
         self.assertEqual(response.status_code, 503)
-        self.assertIs(
-            response.json()["session_secret_persistent"], False
-        )
+        self.assertIs(response.json()["session_secret_persistent"], False)
 
     def test_audit_digest_key_survives_session_secret_rotation(self) -> None:
         environment = self.environment()
@@ -218,7 +240,7 @@ class ProductionAppTests(unittest.TestCase):
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "vcf_ops_mcp.main:create_production_app",
+                "vcf_mcp.main:create_production_app",
                 "--factory",
                 "--host",
                 "127.0.0.1",
@@ -235,9 +257,7 @@ class ProductionAppTests(unittest.TestCase):
         exited_early = False
         output = ""
         try:
-            deadline = (
-                time.monotonic() + UVICORN_STARTUP_TIMEOUT_SECONDS
-            )
+            deadline = time.monotonic() + UVICORN_STARTUP_TIMEOUT_SECONDS
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     exited_early = True

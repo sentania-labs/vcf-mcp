@@ -1,4 +1,4 @@
-# SPEC, vcf-ops-mcp (v1.0)
+# SPEC, vcf-mcp (v1.0)
 
 > **Historical note (2026-08-25).** This v1 design contract is superseded
 > on any point where it disagrees with the captain's 2026-08-24 kickoff
@@ -7,7 +7,7 @@
 
 An unofficial, container-based MCP server plus small admin web UI for VCF
 Operations, deployed on the lab's docker.int container host behind
-fleet-caddy at `https://vcf-ops-mcp.int.sentania.net`. Comparable in
+fleet-caddy at `https://vcf-mcp.int.sentania.net`. Comparable in
 capability class to zw008/VMware-AIops (which targets vCenter via
 pyVmomi), but built on the VCF Operations suite-api, including the
 actions framework. This SPEC is the design contract; changes to it are
@@ -130,9 +130,9 @@ listener behind fleet-caddy TLS:
 - Phase 1: server skeleton, target registry + encrypted credential
   store, token lifecycle, read-only tool families verified against
   DEVEL (read recon allowed), minimal admin UI, CI build to
-  ghcr.io/sentania-labs/vcf-ops-mcp + slot deploy.
+  ghcr.io/sentania-labs/vcf-mcp + slot deploy.
   - Gate 1 (Scott): connect Claude Code to
-    `https://vcf-ops-mcp.int.sentania.net` with a minted key, run read
+    `https://vcf-mcp.int.sentania.net` with a minted key, run read
     queries against devel.
 - Phase 2: actions pipeline (plan-then-apply, async task polling),
   API-key scoping, audit log complete, admin UI action toggles.
@@ -145,11 +145,11 @@ listener behind fleet-caddy TLS:
 ## 7. Deployment
 
 - CI-native: GitHub Actions on self-hosted runners, test + build one
-  image to ghcr.io/sentania-labs/vcf-ops-mcp, deploy job to the
+  image to ghcr.io/sentania-labs/vcf-mcp, deploy job to the
   docker.int slot over the slot deploy key held in repo Actions secrets
   (ai-log-depot is the reference pipeline). Fork-gated.
 - Slot: docker.int, fleet-caddy per-slot conf.d, DNS
-  `vcf-ops-mcp.int.sentania.net`, volumes for the credential store and
+  `vcf-mcp.int.sentania.net`, volumes for the credential store and
   audit log. Provisioned by lab-admin under the container-host contract.
 - Post-deploy configuration (targets, credentials, keys) happens only in
   the admin UI. CI never carries VCF credentials.

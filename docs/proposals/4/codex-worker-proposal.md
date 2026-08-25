@@ -4,7 +4,7 @@
 
 I would make the eventual workflow change deliberately small, but not pretend
 the permission change is the whole deployment repair. The repository currently
-has no `vcf-ops-mcp` organization package, the failed main run never entered
+has no `vcf-mcp` organization package, the failed main run never entered
 the deploy step, the public health endpoint returns 503, and repository secret
 metadata lists only `DOCKER_DEPLOY_KEY`. The workflow instead reads
 `DOCKER_INT_DEPLOY_KEY`, `DEPLOY_HOST`, and `SERVICE_URL`. A permission-only
@@ -19,7 +19,7 @@ The exact workflow diff I recommend after the configuration gate is:
      name: Build & Deploy
      needs: test
      runs-on: [self-hosted]
-     if: github.ref == 'refs/heads/main' && github.repository == 'sentania-labs/vcf-ops-mcp'
+     if: github.ref == 'refs/heads/main' && github.repository == 'sentania-labs/vcf-mcp'
 +    permissions:
 +      contents: read
 +      packages: write
@@ -39,7 +39,7 @@ benefit. Job-level permissions also make every unlisted deploy-job permission
 
 The secret-name correction reflects current repository metadata, but it must be
 confirmed against the slot onboarding record before implementation. If
-`DOCKER_DEPLOY_KEY` is not the `vcf-ops-mcp` forced-command key, the safe fix is
+`DOCKER_DEPLOY_KEY` is not the `vcf-mcp` forced-command key, the safe fix is
 to provision a correctly named repository secret and retain that confirmed name
 in the workflow. The value must never be printed. `DEPLOY_HOST` and
 `SERVICE_URL` must be provisioned before merge, or replaced with an agreed
@@ -61,7 +61,7 @@ Verification is an ordered runbook with explicit failure signals:
 2. **Pre-merge repository configuration gate.** Read repository metadata and
    verify the selected deploy-key secret, `DEPLOY_HOST`, and `SERVICE_URL`
    exist. Confirm with the slot owner that the forced-command key belongs to
-   `vcf-ops-mcp`, that the host accepts the documented `get-digest` and deploy
+   `vcf-mcp`, that the host accepts the documented `get-digest` and deploy
    command forms, and that it can authenticate to pull the package in the
    visibility state the first push will create. Missing names, an unconfirmed
    key, an unsupported command form, or no GHCR pull path stops the merge.
@@ -89,7 +89,7 @@ Verification is an ordered runbook with explicit failure signals:
    exhausted health loop keeps the run red.
 7. **Independent acceptance check.** After the run is green, execute
    `curl -k -sS -o /tmp/vcf-ops-health.json -w '%{http_code}\n'
-   https://vcf-ops-mcp.int.sentania.net/healthz`, require `200`, and retain the
+   https://vcf-mcp.int.sentania.net/healthz`, require `200`, and retain the
    non-secret JSON response. Check that the deployed slot digest equals the
    run's image digest. A 503, other non-200 response, or digest mismatch fails
    acceptance even if GitHub Actions is green.
@@ -135,7 +135,7 @@ workflow-level placement is simpler and already proven in a sibling repository.
 
 If I had one hour and one question, I would ask the slot owner: "What exact
 GHCR credentials, package visibility assumption, forced-command grammar, and
-repository secret names constitute the onboarded `vcf-ops-mcp` slot contract?"
+repository secret names constitute the onboarded `vcf-mcp` slot contract?"
 I would spend the hour comparing that answer, read-only, with the workflow and
 repository metadata. That single answer resolves the most likely failures
 after the push.

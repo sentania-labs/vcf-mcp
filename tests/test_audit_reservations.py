@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from vcf_ops_mcp.dispatcher.reservations import (
+from vcf_mcp.dispatcher.reservations import (
     CALL_RESERVATION_BYTES,
     CHECKPOINT_HEADROOM_BYTES,
     FreeSpaceReservations,

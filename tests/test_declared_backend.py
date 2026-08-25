@@ -5,17 +5,17 @@ from dataclasses import replace
 import httpx
 import pytest
 
-from vcf_ops_mcp.backend_packs import load_backend_packs
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.backend_packs import load_backend_packs
+from vcf_mcp.contracts import (
     BackendKind,
     ConfigurationGeneration,
     TargetId,
     TargetPosture,
     TargetRecord,
 )
-from vcf_ops_mcp.declared_backend import DeclaredBackendClient
-from vcf_ops_mcp.vcf.client import TargetCredentials
-from vcf_ops_mcp.vcf.errors import ResultCapExceeded
+from vcf_mcp.declared_backend import DeclaredBackendClient, _project_response
+from vcf_mcp.vcf.client import TargetCredentials
+from vcf_mcp.vcf.errors import ResultCapExceeded
 
 
 def target(backend: BackendKind) -> TargetRecord:
@@ -76,6 +76,45 @@ async def test_basic_pack_renders_only_declared_path_query_and_projection() -> N
         "results": [{"id": "segment-1", "display_name": "fixture-segment"}],
         "result_count": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_declared_backend_retries_429_with_bounded_backoff() -> None:
+    pack = load_backend_packs()[BackendKind.NSX]
+    attempts = 0
+    delays: list[float] = []
+
+    async def appliance(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return httpx.Response(429, headers={"retry-after": "0.01"}, json={})
+        return httpx.Response(200, json={"results": [], "result_count": 0})
+
+    client = DeclaredBackendClient(
+        target=target(BackendKind.NSX),
+        credentials=TargetCredentials("synthetic-user", "synthetic-password"),
+        pack=pack,
+        http_client=httpx.AsyncClient(
+            base_url="https://nsx.example.internal",
+            transport=httpx.MockTransport(appliance),
+        ),
+    )
+
+    async def capture_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    client._upstream_control._sleep = capture_sleep
+    try:
+        result = await client.request_declared(
+            "list_nsx_segments", {"cursor": None, "page_size": None}
+        )
+    finally:
+        await client.aclose()
+
+    assert result == {"results": [], "result_count": 0}
+    assert attempts == 3
+    assert delays == [0.01, 0.01]
 
 
 @pytest.mark.asyncio
@@ -259,6 +298,15 @@ async def test_log_agent_secret_values_never_enter_the_projected_result() -> Non
             }
         ],
     }
+
+
+def test_scalar_projection_requires_a_tool_owned_value_allowlist() -> None:
+    assert _project_response(
+        "synthetic-secret",
+        allowed_keys=frozenset({"name"}),
+        max_list_items=10,
+        target_id=TargetId("target-1"),
+    ) == {}
 
 
 @pytest.mark.asyncio

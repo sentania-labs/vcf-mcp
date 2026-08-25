@@ -569,7 +569,7 @@ def self_test() -> int:
         print(f"FAIL loading the real protected-paths config: {exc}")
         failures += 1
     else:
-        for required in ("docs/SPEC.md", "CLAUDE.md", "src/vcf_ops_mcp/", ".github/protected-paths.txt"):
+        for required in ("docs/SPEC.md", "CLAUDE.md", "src/vcf_mcp/", ".github/protected-paths.txt"):
             if required not in entries:
                 print(f"FAIL protected-paths config is missing required entry: {required}")
                 failures += 1

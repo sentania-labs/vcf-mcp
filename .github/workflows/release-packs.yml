@@ -1,0 +1,89 @@
+name: Release signed backend packs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/vcf_mcp/packs/**"
+      - ".github/workflows/release-packs.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned cosign
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64
+          echo "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf  cosign" | sha256sum --check
+          chmod 0755 cosign
+      - name: Sign packs with GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir signed-packs
+          for pack in src/vcf_mcp/packs/*.json; do
+            name="$(basename "${pack}")"
+            cp "${pack}" "signed-packs/${name}"
+            ./cosign sign-blob --yes --bundle "signed-packs/${name%.json}.sigstore.json" "${pack}"
+          done
+      - name: Build fixed feed catalog
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          base = "https://github.com/sentania-labs/vcf-mcp/releases/download/backend-packs"
+          entries = []
+          for path in sorted(Path("signed-packs").glob("*.json")):
+              if path.name.endswith(".sigstore.json"):
+                  continue
+              pack = json.loads(path.read_text())
+              entries.append(
+                  {
+                      "id": f"{pack['backend']}:{pack['version']}",
+                      "backend": pack["backend"],
+                      "version": pack["version"],
+                      "tool_count": len(pack["tools"]),
+                      "estimated_definition_tokens": max(
+                          1,
+                          sum(
+                              len(tool["name"])
+                              + len(tool["summary"])
+                              + 32 * len(tool.get("arguments", []))
+                              for tool in pack["tools"]
+                          )
+                          // 4,
+                      ),
+                      "pack_url": f"{base}/{path.name}",
+                      "bundle_url": f"{base}/{path.stem}.sigstore.json",
+                  }
+              )
+          Path("signed-packs/feed.json").write_text(
+              json.dumps({"packs": entries}, indent=2) + "\n"
+          )
+          PY
+      - name: Publish fixed signed-pack feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view backend-packs >/dev/null 2>&1; then
+            gh release create backend-packs --target main --title "Backend packs" --notes "Signed backend-pack distribution feed."
+          fi
+          gh release upload backend-packs signed-packs/* --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-backend-packs
+          path: signed-packs/
+          if-no-files-found: error

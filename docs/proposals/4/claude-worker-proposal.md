@@ -1,6 +1,6 @@
 # Round 4 proposal, claude-worker
 
-Issue: sentania-labs/vcf-ops-mcp#4, "Post-merge deploy fails: workflow missing
+Issue: sentania-labs/vcf-mcp#4, "Post-merge deploy fails: workflow missing
 permissions block, image push denied". Round branch `round/4-deploy-permissions`.
 
 This round ships a spec and a workplan, not the fix. Nothing here was applied.
@@ -14,7 +14,7 @@ and a running service" is false, and I can show it from read-only recon
 without merging anything.
 
 Five defects sit between `main` today and a 200 from
-`https://vcf-ops-mcp.int.sentania.net/healthz`. Only the first is the one the
+`https://vcf-mcp.int.sentania.net/healthz`. Only the first is the one the
 issue names. Two of the remaining four are in the workflow, two are in the
 application, and the application pair means acceptance criterion two is not
 one merge away at all: it depends on a component this repo has never built.
@@ -38,7 +38,7 @@ failing in 34s at `Build and push image`, annotation:
 
 ```
 buildx failed with: ERROR: failed to build: failed to solve: failed to push
-ghcr.io/sentania-labs/vcf-ops-mcp:7cb9d053999aff1f10558c331327f1fe35f3a525:
+ghcr.io/sentania-labs/vcf-mcp:7cb9d053999aff1f10558c331327f1fe35f3a525:
 denied: installation not allowed to Create organization package
 ```
 
@@ -49,7 +49,7 @@ refused the create. That is the `packages: write` signature.
 and this one is fatal on its own.**
 
 ```
-gh api repos/sentania-labs/vcf-ops-mcp/actions/secrets   -> DOCKER_DEPLOY_KEY (only)
+gh api repos/sentania-labs/vcf-mcp/actions/secrets   -> DOCKER_DEPLOY_KEY (only)
 gh api repos/.../actions/variables                       -> total_count: 0
 gh api repos/.../actions/organization-secrets            -> AWS_*, DNS_SERVER,
                                                             DOCKER_HUB_*, KRB*,
@@ -63,7 +63,7 @@ secret that does exist is named `DOCKER_DEPLOY_KEY`, matching hearthgate's
 name, created 2026-07-20, and the workflow does not read it.
 
 So on the first run that gets past the push, the step writes an empty file to
-`$KEY_PATH`, runs `ssh -i <empty key> deploy@ vcf-ops-mcp get-digest` (host
+`$KEY_PATH`, runs `ssh -i <empty key> deploy@ vcf-mcp get-digest` (host
 literally `deploy@`), swallows that failure through `|| echo "none"`, and then
 runs the second `ssh` with no `||` guard. GitHub runs `run:` blocks under
 `bash -e`, so the step exits nonzero there. Criterion one, "slot deploy
@@ -79,7 +79,7 @@ the closing comment on its own.
 **D3. `/healthz` cannot return 200 from the container image, at any digest.
 CONFIRMED, and it is already a known open finding.**
 
-`Dockerfile:38` starts `uvicorn vcf_ops_mcp.app:create_app --factory`. Uvicorn
+`Dockerfile:38` starts `uvicorn vcf_mcp.app:create_app --factory`. Uvicorn
 calls the factory with no arguments, so `audit_repository` takes its default of
 `None` (`app.py:54`). `healthz` then falls to the `else` branch at
 `app.py:27-34` and returns 503 unconditionally. There is no path through the
@@ -113,7 +113,7 @@ D3 and D4 stack. Fixing D4 alone gets a live process that answers 503 on
 **D5. The slot's forced-command interface is an assumption, not a verified
 contract. UNRESOLVED, and it is my one-hour question.**
 
-The deploy step calls `vcf-ops-mcp get-digest` and `vcf-ops-mcp <image-ref>` as
+The deploy step calls `vcf-mcp get-digest` and `vcf-mcp <image-ref>` as
 forced-command subcommands. `grep -rn 'get-digest' docs/ .team/` finds that
 string nowhere outside this repo's own workflow. The nearest thing to a source
 is `docs/proposals/2/SPEC.md:488`, which says "the onboarded slot's
@@ -124,7 +124,7 @@ The working sibling does it differently. `sentania-labs/hearthgate`
 `ssh ... "docker compose ... pull|up -d|ps"` commands against
 `vars.DOCKER_DEPLOY_HOST`. That is a general-purpose shell key, not a forced
 command with a subcommand grammar. If docker.int onboarded this project the
-same way lab-admin onboarded hearthgate, `vcf-ops-mcp get-digest` is not a
+same way lab-admin onboarded hearthgate, `vcf-mcp get-digest` is not a
 thing the key can run, and the entire deploy step is written against an
 interface that does not exist.
 
@@ -135,7 +135,7 @@ biggest unknown in the round and I say so rather than hedging past it.
 
 **The rename is free. Do it.** Three named worries, all of them empty:
 
-- Branch protection: `gh api repos/sentania-labs/vcf-ops-mcp/branches/main/protection`
+- Branch protection: `gh api repos/sentania-labs/vcf-mcp/branches/main/protection`
   returns `404 Branch not protected`. There are no required status checks to
   break. (Separately: that means the consensus gate and CI are both
   advisory on `main` right now, which someone should want to know.)
@@ -145,7 +145,7 @@ biggest unknown in the round and I say so rather than hedging past it.
   `docs/`, and `.team/`. No machinery reads it.
 
 Renaming the file changes the check-run name from `ai-log-depot / Build & Deploy`
-to `vcf-ops-mcp / Build & Deploy`. Nothing consumes either string. The only
+to `vcf-mcp / Build & Deploy`. Nothing consumes either string. The only
 real cost is that the old run history no longer groups with the new file in the
 Actions sidebar, which for a workflow with one failing run is not a cost.
 
@@ -157,7 +157,7 @@ way. It does not. The `installation not allowed` wording points at the
 workflow token's own permission set, not at an org setting.
 
 **fleet-caddy is genuinely resolved.**
-`curl -s -o /dev/null -w '%{http_code}' https://vcf-ops-mcp.int.sentania.net/healthz`
+`curl -s -o /dev/null -w '%{http_code}' https://vcf-mcp.int.sentania.net/healthz`
 returns `503` today. During round 3's spike 002 the same host died at Client
 Hello with `SSL_ERROR_SYSCALL` (`.team/blocked/fleet-caddy-slot-config.md`).
 TLS now terminates and the proxy answers, so the per-slot config landed as the
@@ -165,7 +165,7 @@ issue says. `.team/blocked/fleet-caddy-slot-config.md` should be closed out
 this round, since it is still sitting there reading as open.
 
 **The package does not exist yet.**
-`gh api orgs/sentania-labs/packages/container/vcf-ops-mcp` returns
+`gh api orgs/sentania-labs/packages/container/vcf-mcp` returns
 `404 Package not found`, while the same call for `hearthgate` returns a
 `403 read:packages scope` error from the same token. The token's scopes
 (`gist, read:org, repo, workflow`) lack `read:packages` in both cases, so the
@@ -178,19 +178,19 @@ push is a create, and creates land private.
 
 Two commits, both in `.github/workflows/`, one file.
 
-**Commit 1, `vcf-ops-mcp.yml` (git mv from `ai-log-depot.yml`).** The rename
+**Commit 1, `vcf-mcp.yml` (git mv from `ai-log-depot.yml`).** The rename
 alone, so the substantive diff in commit 2 is readable rather than buried in a
 whole-file add/delete pair.
 
 ```yaml
 -name: ai-log-depot
-+name: vcf-ops-mcp
++name: vcf-mcp
 ```
 
 **Commit 2, the substance.**
 
 ```yaml
- name: vcf-ops-mcp
+ name: vcf-mcp
 
 +permissions:
 +  contents: read
@@ -210,7 +210,7 @@ Then split the current `deploy` job in two:
      name: Build & Push
      needs: test
      runs-on: [self-hosted]
-     if: github.repository == 'sentania-labs/vcf-ops-mcp'
+     if: github.repository == 'sentania-labs/vcf-mcp'
      outputs:
        digest: ${{ steps.build.outputs.digest }}
      steps:
@@ -221,13 +221,13 @@ Then split the current `deploy` job in two:
          with:
            context: .
            push: true
-           tags: ghcr.io/sentania-labs/vcf-ops-mcp:${{ github.sha }}
+           tags: ghcr.io/sentania-labs/vcf-mcp:${{ github.sha }}
 
    deploy:
      name: Build & Deploy
      needs: build
      runs-on: [self-hosted]
-     if: github.ref == 'refs/heads/main' && github.repository == 'sentania-labs/vcf-ops-mcp'
+     if: github.ref == 'refs/heads/main' && github.repository == 'sentania-labs/vcf-mcp'
      steps:
        - name: Preflight, required deploy configuration is present
          env:
@@ -324,7 +324,7 @@ guessing. A different `denied:` string means something else again and gets read
 literally, not pattern-matched to D1.
 
 **Step 2. Read the package back.**
-`gh api orgs/sentania-labs/packages/container/vcf-ops-mcp` with a token that
+`gh api orgs/sentania-labs/packages/container/vcf-mcp` with a token that
 carries `read:packages`, checking `visibility` and `repository`. The token in
 this worktree does not have that scope, so this needs a token that does.
 *Proves:* what the first push actually produced, which is the orchestrator's
@@ -368,7 +368,7 @@ prior digest found to roll back to" before exiting 1. That path is at least
 written correctly.
 
 **Step 6. Evidence for the closing comment.** The run link, the
-`curl -i https://vcf-ops-mcp.int.sentania.net/healthz` output showing 200 and
+`curl -i https://vcf-mcp.int.sentania.net/healthz` output showing 200 and
 the JSON body, and the package visibility from step 2. Plus, and I would insist
 on this, a note that `TEAM-STATE.md:321` overstated the secret work and that
 the two missing secrets were created in step 0. A closing comment that says
@@ -423,7 +423,7 @@ arguing against. The specific hazard is `needs.build.outputs.digest`: job
 outputs from `docker/build-push-action` marshal through `$GITHUB_OUTPUT` and I
 have not verified the digest survives the job boundary intact rather than
 arriving empty. If it arrives empty, the deploy ssh's a bare
-`ghcr.io/sentania-labs/vcf-ops-mcp@` and fails on `main`. Step 1 does not catch
+`ghcr.io/sentania-labs/vcf-mcp@` and fails on `main`. Step 1 does not catch
 this, because on a round branch the `deploy` job is skipped and the output is
 never consumed. Honest mitigation: a throwaway `echo` step in the round-branch
 `build` job that prints the digest, which proves the value exists but not that

@@ -26,7 +26,7 @@ accept that the first real exercise is on `main`, which is where this workflow
 stands today anyway. The fallback is the status quo plus the fix, so a veto
 costs the round nothing it currently has.
 
-## Question B: rename `ai-log-depot.yml` to `vcf-ops-mcp.yml`
+## Question B: rename `ai-log-depot.yml` to `vcf-mcp.yml`
 
 **Vote: for**, in the standalone-commit form: a `git mv` plus the one-line
 `name:` change, committed before the substantive commit. Not a party to this

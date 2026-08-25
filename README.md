@@ -15,7 +15,7 @@ registered product:
 - `/vsan-dp/mcp` for vSAN Data Protection
 - `/vcf/mcp` for read-only management information
 
-The product definitions are unsigned, data-only backend packs. All nine
+The product definitions are data-only backend packs. All nine
 built-in product packs publish exactly 19 typed tools, with no compressed or
 collapsed tool contracts. Each product endpoint exposes only its own typed
 tools. A backend that has no registered target at process start has no endpoint
@@ -40,8 +40,19 @@ offering.
   discard results from the superseded target generation.
 - API keys select endpoints, capabilities, and targets. Revocation applies on
   the next request.
+- Local mode supports many explicitly scoped keys and defaults new keys to no
+  tool scope. Gateway mode issues one broad key per endpoint registration.
+  Switching modes revokes every active key in the same transaction.
 - Audit rows identify the endpoint plus the backend pack ID, SHA-256 digest,
-  and version that defined each call.
+  version, authorization mode, and key owner that defined each call.
+- Three consecutive authentication failures lock one target before another
+  request can reach it. The admin UI shows and clears that persistent state.
+- Each backend has bounded concurrency and bounded exponential 429 backoff.
+- Every declared tool owns an explicit response-field allowlist. There is no
+  backend-wide fallback that can accidentally grant a sensitive field.
+- Credential keys rotate online in resumable batches. Startup quarantines one
+  integrity-failed target and refuses readiness if every configured target
+  fails.
 - `/vcf/mcp` exposes wired backends, granted access, health, skills, and call
   history. History is filtered by both the presenting key and
   `X-VCF-Caller-ID`, and returns nothing without that caller header.
@@ -49,27 +60,26 @@ offering.
 Fixture tests make typed calls using Basic authentication, OpsToken, bearer
 tokens, SDDC Manager token pairs, VCF Operations token exchange, and vCenter
 session IDs. They also prove that an operator pack can load alongside the
-official built-in set. They do not contact a lab appliance.
+official built-in set. Signed-pack tests prove the exact cosign argument
+array, workflow identity, issuer pin, offline bundle use, retention, and
+rollback. They do not contact a lab appliance.
 
 ## Prototype boundary
 
-This is a workable lab prototype, not the finished VCF MCP product. The
-following production work is deliberately deferred:
+This is a workable lab prototype, not the finished VCF MCP product. Per-endpoint
+token-budget warnings and install refusal remain deferred.
 
-- cosign signing, identity pinning, the pack trust root, and trust-root refresh
-- backend pack feed installation and rollback
-- gateway mode and the authorization-mode toggle
-- the failed-auth circuit breaker
-- upstream rate limiting and backoff
-- response redaction
-- token-budget warnings and install refusal
-
-The built-in packs load from disk and are unsigned-only. The validated loader
-also accepts operator-supplied pack definitions alongside the official set,
-without allowing them to replace a built-in product. The server refuses to
-put any target into an actions-enabled posture while unsigned packs are in use.
-Fingerprint pinning is intentionally not implemented. Uploaded CA bundles are
-the trust mechanism.
+Operator packs are installed from the admin UI, either through the fixed feed
+or by uploading a pack and its Sigstore bundle. The container runs digest-pinned
+cosign and pins verification to
+`.github/workflows/release-packs.yml@refs/heads/main` with the GitHub Actions
+issuer. The immutable default trust root is baked into the image. An operator
+refresh from the fixed URL is persisted on `/data` and takes precedence when
+present. Installation and rollback stage files for the next restart because the
+active registry stays frozen. Unsigned install
+is off by default, persistently flagged when enabled, and refused whenever any
+target permits actions. Fingerprint pinning remains intentionally excluded.
+Uploaded CA bundles are the appliance TLS trust mechanism.
 
 The fixture proof cannot establish the following without Scott's hardware:
 
@@ -80,6 +90,12 @@ The fixture proof cannot establish the following without Scott's hardware:
 - the exact response shapes and permissions of the devel appliances
 - Streamable HTTP behavior through the lab reverse proxy
 - credential decryption and audit continuity after a real container restart
+- a real release bundle verifying offline with the shipped trust root
+- gateway reachability isolation or mutual TLS outside the application
+- authentication lockout behavior against the DEVEL appliance and its identity source
+- real 429 timing and safe concurrency values for each product
+- response allowlists against the complete live response shapes
+- rotation and separate-artifact restore across the deployed volumes
 
 No lab credentials were requested or used. The operator verification packet is
 in [docs/PROTOTYPE.md](docs/PROTOTYPE.md).
@@ -115,6 +131,7 @@ docker run --name vcf-mcp --rm \
   --user 10001:10001 \
   --security-opt no-new-privileges \
   --cap-drop ALL \
+  --tmpfs /tmp:rw,noexec,nosuid,size=128m \
   -p 8000:8000 \
   -e PUBLIC_BASE_URL=http://localhost:8000 \
   -v vcf-mcp-data:/data \
@@ -129,47 +146,42 @@ response is HTTP 200 and reports `audit_writable`, `configuration_ready`,
 
 ## First admin sign-in and backend wiring
 
-The approved bootstrap path uses an operator-supplied password file. The
-password must contain at least 16 bytes. It is hashed with scrypt and the file
-is removed when the first login initializes the account.
-
-For a local container, create it without placing the password in shell history
-or process arguments:
-
-```sh
-docker exec -it vcf-mcp sh
-umask 077
-python -c 'import getpass,pathlib; pathlib.Path("/keys/admin_bootstrap_password").write_text(getpass.getpass("New admin password: "))'
-exit
-```
-
-Open `http://localhost:8000/admin/login` and sign in as `admin`.
+Open `http://localhost:8000/admin/login`. The first-run interface requires an
+operator-supplied admin password of at least 16 bytes, hashes it immediately
+with scrypt, and never retains the source value. There is no default password
+and no file-editing prerequisite. The one-use password-file bootstrap remains
+available for orchestrated deployments.
 
 1. Register the product targets needed by this appliance. Leave TLS disabled
    only until the correct CA is uploaded.
 2. Restart the container. Backend packs are selected and tool registries are
    frozen at startup, so the first registration for a product needs a restart.
 3. Edit each target, upload its CA bundle, enable TLS verification, and save.
-4. Mint a key with the required product endpoints plus `/vcf/mcp`, explicit
-   read capabilities, and matching targets.
-5. Configure MCP clients with `Authorization: Bearer <displayed-key>` and the
+4. Choose local or gateway authorization mode. Changing an existing mode
+   revokes every active key.
+5. Mint local keys with explicit scopes and optional target restrictions, or
+   mint one gateway key for each upstream endpoint registration.
+6. Configure MCP clients with `Authorization: Bearer <displayed-key>` and the
    endpoint URL. The plaintext key is displayed once.
-6. Use `/vcf/mcp` `list_targets` to obtain target IDs, then call a typed tool on
+7. Use `/vcf/mcp` `list_targets` to obtain target IDs, then call a typed tool on
    each product endpoint.
-7. Inspect `/admin/audit`, revoke the key, and confirm its next request fails.
+8. Inspect `/admin/audit`, revoke the key, and confirm its next request fails.
 
 ## Persistent data and recovery
 
 | Volume path | Contents |
 | --- | --- |
-| `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and CA envelopes, and API-key digests |
-| `/keys` | Session secret, audit digest key, AES-256-GCM credential keyring, and one-use admin bootstrap file |
+| `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and CA envelopes, API-key digests, operator packs, and the persisted refreshed pack trust root |
+| `/keys` | Session secret, audit digest key, AES-256-GCM credential keyring, and optional one-use admin bootstrap file |
 | `/audit` | Append-only SQLite audit ledger |
 
-Back up `/data`, `/keys`, and `/audit` as separate protected artifacts. Losing
+Back up `/data`, `/keys`, and `/audit` as separate protected artifacts. The
+database backup API refuses to write into the keyring volume, and the recovery
+test restores a database artifact with a separately held keyring. Losing
 `/keys` while encrypted target records remain is intentionally unrecoverable.
 The server refuses to regenerate the credential keyring over existing
 ciphertext. Do not use `docker compose down -v` for an established deployment.
+Use the admin UI to run credential-key rotation in resumable batches.
 
 See [docs/SPEC.md](docs/SPEC.md), [docs/PROTOTYPE.md](docs/PROTOTYPE.md), and
 the accepted [decision records](docs/decisions) for the governing contracts and

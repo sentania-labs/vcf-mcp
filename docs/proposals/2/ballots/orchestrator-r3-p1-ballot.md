@@ -1,6 +1,6 @@
 # Orchestrator ballot, round 3 phase 3
 
-- **Round:** vcf-ops-mcp Phase 1 build synthesis
+- **Round:** vcf-mcp Phase 1 build synthesis
 - **Voter:** orchestrator (run `gh-issue-2-triage-20260724-205415`)
 - **Cast after** reading all three doer ballots, all three proposals, and all
   three critiques. Cast in the open, as the fourth of four ballots.

@@ -5,8 +5,8 @@ import asyncio
 import httpx
 import pytest
 
-from vcf_ops_mcp.backend_packs import load_backend_packs
-from vcf_ops_mcp.contracts import (
+from vcf_mcp.backend_packs import load_backend_packs
+from vcf_mcp.contracts import (
     BackendKind,
     ConfigurationGeneration,
     InvalidationMode,
@@ -15,16 +15,17 @@ from vcf_ops_mcp.contracts import (
     TargetPosture,
     TargetRecord,
 )
-from vcf_ops_mcp.mcp_server import BackendClientPool
-from vcf_ops_mcp.vcenter import (
+from vcf_mcp.mcp_server import BackendClientPool
+from vcf_mcp.vcenter import (
     HANDLERS,
     VcenterTargetClient,
     list_vcenter_hosts,
     list_vcenter_vms,
 )
-from vcf_ops_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
-from vcf_ops_mcp.vcf.client import TargetCredentials
-from vcf_ops_mcp.vcf.errors import (
+from vcf_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
+from vcf_mcp.vcf.client import TargetCredentials
+from vcf_mcp.vcf.errors import (
+    AuthenticationError,
     PermissionDeniedError,
     ReauthenticationExhausted,
     ResultCapExceeded,
@@ -383,6 +384,64 @@ class PoolClient:
 
     async def aclose(self) -> None:
         self.fully_closed = True
+
+
+@pytest.mark.asyncio
+async def test_pool_serializes_unconfirmed_auth_and_locks_before_a_fourth_attempt() -> None:
+    record = target(generation=1)
+
+    class CircuitRepository(PoolRepository):
+        def __init__(self) -> None:
+            self.failures = 0
+            self.locked = False
+
+        async def get(self, _target_id: TargetId) -> TargetRecord:
+            return TargetRecord(
+                id=record.id,
+                name=record.name,
+                fqdn=record.fqdn,
+                posture=record.posture,
+                is_prod=record.is_prod,
+                verify_ssl=record.verify_ssl,
+                auth_source=record.auth_source,
+                configuration_generation=record.configuration_generation,
+                backend=record.backend,
+                auth_failure_count=self.failures,
+                auth_locked=self.locked,
+            )
+
+        async def record_auth_failure(self, _target_id: TargetId) -> bool:
+            self.failures += 1
+            self.locked = self.failures >= 3
+            return self.locked
+
+        async def record_auth_success(self, _target_id: TargetId) -> None:
+            self.failures = 0
+
+    repository = CircuitRepository()
+    attempts = 0
+
+    def factory(candidate: TargetRecord, _credentials, _root_ca) -> PoolClient:
+        return PoolClient(candidate)
+
+    async def refused(_client: PoolClient, **_arguments: object) -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        raise AuthenticationError("synthetic refusal", target_id=record.id)
+
+    pool = BackendClientPool(
+        repository,
+        load_backend_packs()[BackendKind.VCENTER],
+        client_factory=factory,
+    )
+    results = await asyncio.gather(
+        *(pool.invoke(record, refused, {}) for _ in range(8)),
+        return_exceptions=True,
+    )
+    assert attempts == 3
+    assert repository.locked
+    assert all(isinstance(result, (AuthenticationError, PermissionError)) for result in results)
+    await pool.aclose()
 
 
 @pytest.mark.asyncio

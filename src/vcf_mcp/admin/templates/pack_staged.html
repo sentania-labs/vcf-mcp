@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Review backend pack{% endblock %}
+{% block content %}
+<section class="card" style="max-width:720px; margin:0 auto">
+  <h1>Review staged backend pack</h1>
+  <p>The pack passed its configured trust check. Confirm the surface change before installation.</p>
+  <table>
+    <tbody>
+      <tr><th>Backend</th><td>{{ pack.backend }}</td></tr>
+      <tr><th>Version</th><td>{{ pack.version }}</td></tr>
+      <tr><th>Digest</th><td><code>{{ pack.digest }}</code></td></tr>
+      <tr><th>Tool count</th><td>{{ pack.tool_count }}</td></tr>
+      <tr><th>Estimated definition tokens</th><td>{{ pack.estimated_definition_tokens }}</td></tr>
+      <tr><th>Trust</th><td>{{ "signed" if pack.signed else "unsigned" }}</td></tr>
+    </tbody>
+  </table>
+  <p class="notice">Installation retains the previous version and requires a container restart before this pack defines a running endpoint.</p>
+  <form method="post" action="/admin/packs/confirm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="backend" value="{{ pack.backend }}">
+    <input type="hidden" name="digest" value="{{ pack.digest }}">
+    <button type="submit">Install staged pack</button>
+  </form>
+  <p><a href="/admin">Cancel and return to administration</a></p>
+</section>
+{% endblock %}
