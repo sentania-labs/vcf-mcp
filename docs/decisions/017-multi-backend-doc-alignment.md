@@ -1,13 +1,14 @@
 # 017: Align governing documents with the multi-backend product
 
-- **Status:** accepted by principal directive
+- **Status:** accepted on Firstmate ruling, not yet captain-reviewed
 - **Date:** 2026-08-25
 - **Assignment:** Documentation pass for the multi-backend prototype
   (decision 016): bring the design contract and constitution into line
   with the captain's 2026-08-24 kickoff specification.
 - **Lane:** Firstmate direct dispatch
 - **Workers dispatched:** None (directive authority)
-- **Authority:** captain decision, 2026-08-25, applied verbatim: mark
+- **Authority:** Firstmate ruling, 2026-08-25, made on the captain's
+  behalf; the captain has not reviewed this ruling. Applied verbatim: mark
   `docs/SPEC.md` as a historical contract superseded where it disagrees
   with the 2026-08-24 kickoff specification, correct only actively
   misleading constitution text, and record the supersession here.
@@ -71,5 +72,6 @@ protected path that PR touches.
 
 ## Sign-offs
 
-None. This is a principal-directed documentation alignment whose
-authority is recorded above; no worker proposal round ran.
+None. This documentation alignment rests on the Firstmate ruling
+recorded above, made on the captain's behalf and not yet reviewed by
+the captain; no worker proposal round ran.
