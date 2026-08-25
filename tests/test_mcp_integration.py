@@ -211,10 +211,26 @@ def test_endpoint_surfaces_are_flat_typed_and_backend_specific(mcp_system) -> No
         vcf_tools = rpc(client, "vcf", key, "tools/list", {}).json()["result"]["tools"]
 
     assert len(ops_tools) == 19
+    assert len(vcenter_tools) == 19
     assert {tool["name"] for tool in vcenter_tools} == {
         "list_vcenter_vms",
         "get_vcenter_vm",
         "list_vcenter_hosts",
+        "list_vcenter_clusters",
+        "get_vcenter_cluster",
+        "list_vcenter_datacenters",
+        "get_vcenter_datacenter",
+        "list_vcenter_datastores",
+        "get_vcenter_datastore",
+        "list_vcenter_resource_pools",
+        "get_vcenter_resource_pool",
+        "list_vcenter_folders",
+        "list_vcenter_networks",
+        "list_vcenter_storage_policies",
+        "list_vcenter_content_libraries",
+        "get_vcenter_content_library",
+        "list_vcenter_content_library_items",
+        "get_vcenter_content_library_item",
         "get_vcenter_session",
     }
     assert "list_wired_backends" in {tool["name"] for tool in vcf_tools}

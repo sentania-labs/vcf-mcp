@@ -15,10 +15,11 @@ registered product:
 - `/vsan-dp/mcp` for vSAN Data Protection
 - `/vcf/mcp` for read-only management information
 
-The product definitions are unsigned, data-only backend packs. Each of the
-seven estate packs added after the initial prototype publishes 19 typed tools.
-Each product endpoint exposes only its own typed tools. A backend that has no
-registered target at process start has no endpoint and contributes no tools.
+The product definitions are unsigned, data-only backend packs. All nine
+built-in product packs publish exactly 19 typed tools, with no compressed or
+collapsed tool contracts. Each product endpoint exposes only its own typed
+tools. A backend that has no registered target at process start has no endpoint
+and contributes no tools.
 Every tool call still crosses the mandatory authorization and durable audit
 dispatcher.
 

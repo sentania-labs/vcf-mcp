@@ -66,6 +66,15 @@ per-product list. Firstmate approved this factual constitution alignment.
 It is a documentation alignment only, not a captain or principal directive,
 and it changes no rule or invariant.
 
+## vCenter completion
+
+Firstmate identified that the prototype-era vCenter pack still carried only
+four tools. Firstmate directed this PR to remove that temporary exemption and
+carry vCenter at the same density as the other products. All nine built-in
+product packs now declare exactly 19 distinct tools. The vCenter list and get
+operations remain separate contracts, each with its own frozen HTTP method,
+path, query allowlist, and response projection.
+
 ## Protected paths touched
 
 `src/vcf_ops_mcp/`

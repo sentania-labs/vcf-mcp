@@ -291,70 +291,350 @@ async def list_vcenter_vms(
     clusters: Sequence[str] | None = None,
     resource_pools: Sequence[str] | None = None,
 ) -> dict[str, object]:
-    raw = await client.request_read(
+    return await _list_projected(
+        client,
         "list_vcenter_vms",
         query={
-            "names": names,
-            "power_states": power_states,
             "vms": vms,
+            "names": names,
             "folders": folders,
             "datacenters": datacenters,
             "hosts": hosts,
             "clusters": clusters,
             "resource_pools": resource_pools,
+            "power_states": power_states,
         },
+        allowed=("vm", "name", "power_state", "cpu_count", "memory_size_mib"),
+        label="VM",
     )
-    if not isinstance(raw, list):
-        raise UpstreamProtocolError(
-            "vCenter VM list was not a list", target_id=client.target_id
-        )
-    client.enforce_list_cap(len(raw))
-    return {"items": [_project_vm_summary(item) for item in raw], "count": len(raw)}
 
 
 async def get_vcenter_vm(client: VcenterTargetClient, *, vm: str) -> dict[str, object]:
-    raw = await client.request_read("get_vcenter_vm", path_parameters={"vm": vm})
-    if not isinstance(raw, dict):
-        raise UpstreamProtocolError(
-            "vCenter VM detail was not an object", target_id=client.target_id
-        )
-    allowed = ("name", "power_state", "guest_OS", "cpu", "memory", "hardware")
-    return {key: raw[key] for key in allowed if key in raw}
+    return await _get_projected(
+        client,
+        "get_vcenter_vm",
+        path_parameters={"vm": vm},
+        allowed=(
+            "name",
+            "guest_os",
+            "identity",
+            "power_state",
+            "hardware",
+            "boot",
+            "cpu",
+            "memory",
+        ),
+        label="VM",
+    )
 
 
 async def list_vcenter_hosts(
     client: VcenterTargetClient,
     *,
-    names: Sequence[str] | None = None,
-    connection_states: Sequence[str] | None = None,
     hosts: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    folders: Sequence[str] | None = None,
     datacenters: Sequence[str] | None = None,
     clusters: Sequence[str] | None = None,
-    standalone: bool | None = None,
+    connection_states: Sequence[str] | None = None,
+    host_uuids: Sequence[str] | None = None,
 ) -> dict[str, object]:
-    raw = await client.request_read(
+    return await _list_projected(
+        client,
         "list_vcenter_hosts",
         query={
-            "names": names,
-            "connection_states": connection_states,
             "hosts": hosts,
+            "names": names,
+            "folders": folders,
             "datacenters": datacenters,
             "clusters": clusters,
-            "standalone": standalone,
+            "connection_states": connection_states,
+            "host_uuids": host_uuids,
         },
+        allowed=("host", "name", "connection_state", "power_state", "host_uuid"),
+        label="host",
     )
-    if not isinstance(raw, list):
-        raise UpstreamProtocolError(
-            "vCenter host list was not a list", target_id=client.target_id
-        )
-    client.enforce_list_cap(len(raw))
-    allowed = ("host", "name", "connection_state", "power_state")
-    projected = [
-        {key: item[key] for key in allowed if key in item}
-        for item in raw
-        if isinstance(item, dict)
-    ]
-    return {"items": projected, "count": len(projected)}
+
+
+async def list_vcenter_clusters(
+    client: VcenterTargetClient,
+    *,
+    clusters: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    folders: Sequence[str] | None = None,
+    datacenters: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_clusters",
+        query={
+            "clusters": clusters,
+            "names": names,
+            "folders": folders,
+            "datacenters": datacenters,
+        },
+        allowed=("cluster", "name", "ha_enabled", "drs_enabled"),
+        label="cluster",
+    )
+
+
+async def get_vcenter_cluster(
+    client: VcenterTargetClient, *, cluster: str
+) -> dict[str, object]:
+    return await _get_projected(
+        client,
+        "get_vcenter_cluster",
+        path_parameters={"cluster": cluster},
+        allowed=("name", "resource_pool"),
+        label="cluster",
+    )
+
+
+async def list_vcenter_datacenters(
+    client: VcenterTargetClient,
+    *,
+    datacenters: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    folders: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_datacenters",
+        query={"datacenters": datacenters, "names": names, "folders": folders},
+        allowed=("datacenter", "name"),
+        label="datacenter",
+    )
+
+
+async def get_vcenter_datacenter(
+    client: VcenterTargetClient, *, datacenter: str
+) -> dict[str, object]:
+    return await _get_projected(
+        client,
+        "get_vcenter_datacenter",
+        path_parameters={"datacenter": datacenter},
+        allowed=(
+            "name",
+            "datastore_folder",
+            "host_folder",
+            "network_folder",
+            "vm_folder",
+        ),
+        label="datacenter",
+    )
+
+
+async def list_vcenter_datastores(
+    client: VcenterTargetClient,
+    *,
+    datastores: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    types: Sequence[str] | None = None,
+    folders: Sequence[str] | None = None,
+    datacenters: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_datastores",
+        query={
+            "datastores": datastores,
+            "names": names,
+            "types": types,
+            "folders": folders,
+            "datacenters": datacenters,
+        },
+        allowed=("datastore", "name", "type", "free_space", "capacity"),
+        label="datastore",
+    )
+
+
+async def get_vcenter_datastore(
+    client: VcenterTargetClient, *, datastore: str
+) -> dict[str, object]:
+    return await _get_projected(
+        client,
+        "get_vcenter_datastore",
+        path_parameters={"datastore": datastore},
+        allowed=(
+            "name",
+            "type",
+            "accessible",
+            "free_space",
+            "multiple_host_access",
+            "thin_provisioning_supported",
+        ),
+        label="datastore",
+    )
+
+
+async def list_vcenter_resource_pools(
+    client: VcenterTargetClient,
+    *,
+    resource_pools: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    parent_resource_pools: Sequence[str] | None = None,
+    datacenters: Sequence[str] | None = None,
+    hosts: Sequence[str] | None = None,
+    clusters: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_resource_pools",
+        query={
+            "resource_pools": resource_pools,
+            "names": names,
+            "parent_resource_pools": parent_resource_pools,
+            "datacenters": datacenters,
+            "hosts": hosts,
+            "clusters": clusters,
+        },
+        allowed=("resource_pool", "name"),
+        label="resource pool",
+    )
+
+
+async def get_vcenter_resource_pool(
+    client: VcenterTargetClient, *, resource_pool: str
+) -> dict[str, object]:
+    return await _get_projected(
+        client,
+        "get_vcenter_resource_pool",
+        path_parameters={"resourcePool": resource_pool},
+        allowed=("name", "resource_pools", "cpu_allocation", "memory_allocation"),
+        label="resource pool",
+    )
+
+
+async def list_vcenter_folders(
+    client: VcenterTargetClient,
+    *,
+    folders: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    parent_folders: Sequence[str] | None = None,
+    datacenters: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_folders",
+        query={
+            "folders": folders,
+            "names": names,
+            "parent_folders": parent_folders,
+            "datacenters": datacenters,
+        },
+        allowed=("folder", "name", "type"),
+        label="folder",
+    )
+
+
+async def list_vcenter_networks(
+    client: VcenterTargetClient,
+    *,
+    networks: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+    types: Sequence[str] | None = None,
+    folders: Sequence[str] | None = None,
+    datacenters: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_networks",
+        query={
+            "networks": networks,
+            "names": names,
+            "types": types,
+            "folders": folders,
+            "datacenters": datacenters,
+        },
+        allowed=("network", "name", "type"),
+        label="network",
+    )
+
+
+async def list_vcenter_storage_policies(
+    client: VcenterTargetClient,
+    *,
+    policies: Sequence[str] | None = None,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_storage_policies",
+        query={"policies": policies},
+        allowed=("policy", "name", "description"),
+        label="storage policy",
+    )
+
+
+async def list_vcenter_content_libraries(
+    client: VcenterTargetClient,
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_content_libraries",
+        allowed=("library",),
+        identifier_key="library",
+        label="content library",
+    )
+
+
+async def get_vcenter_content_library(
+    client: VcenterTargetClient, *, library_id: str
+) -> dict[str, object]:
+    return await _get_projected(
+        client,
+        "get_vcenter_content_library",
+        path_parameters={"libraryId": library_id},
+        allowed=(
+            "id",
+            "name",
+            "description",
+            "type",
+            "creation_time",
+            "last_modified_time",
+            "last_sync_time",
+            "version",
+        ),
+        label="content library",
+    )
+
+
+async def list_vcenter_content_library_items(
+    client: VcenterTargetClient, *, library_id: str
+) -> dict[str, object]:
+    return await _list_projected(
+        client,
+        "list_vcenter_content_library_items",
+        query={"library_id": library_id},
+        allowed=("library_item",),
+        identifier_key="library_item",
+        label="content library item",
+    )
+
+
+async def get_vcenter_content_library_item(
+    client: VcenterTargetClient, *, library_item_id: str
+) -> dict[str, object]:
+    return await _get_projected(
+        client,
+        "get_vcenter_content_library_item",
+        path_parameters={"libraryItemId": library_item_id},
+        allowed=(
+            "id",
+            "library_id",
+            "name",
+            "description",
+            "type",
+            "content_version",
+            "creation_time",
+            "last_modified_time",
+            "last_sync_time",
+            "metadata_version",
+            "cached",
+            "size",
+            "version",
+        ),
+        label="content library item",
+    )
 
 
 async def get_vcenter_session(client: VcenterTargetClient) -> dict[str, object]:
@@ -371,6 +651,21 @@ HANDLERS = {
     "list_vcenter_vms": list_vcenter_vms,
     "get_vcenter_vm": get_vcenter_vm,
     "list_vcenter_hosts": list_vcenter_hosts,
+    "list_vcenter_clusters": list_vcenter_clusters,
+    "get_vcenter_cluster": get_vcenter_cluster,
+    "list_vcenter_datacenters": list_vcenter_datacenters,
+    "get_vcenter_datacenter": get_vcenter_datacenter,
+    "list_vcenter_datastores": list_vcenter_datastores,
+    "get_vcenter_datastore": get_vcenter_datastore,
+    "list_vcenter_resource_pools": list_vcenter_resource_pools,
+    "get_vcenter_resource_pool": get_vcenter_resource_pool,
+    "list_vcenter_folders": list_vcenter_folders,
+    "list_vcenter_networks": list_vcenter_networks,
+    "list_vcenter_storage_policies": list_vcenter_storage_policies,
+    "list_vcenter_content_libraries": list_vcenter_content_libraries,
+    "get_vcenter_content_library": get_vcenter_content_library,
+    "list_vcenter_content_library_items": list_vcenter_content_library_items,
+    "get_vcenter_content_library_item": get_vcenter_content_library_item,
     "get_vcenter_session": get_vcenter_session,
 }
 
@@ -416,8 +711,46 @@ def _rebuffered_headers(headers: httpx.Headers) -> httpx.Headers:
     return rebuilt
 
 
-def _project_vm_summary(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
-        return {}
-    allowed = ("vm", "name", "power_state", "cpu_count", "memory_size_MiB")
-    return {key: value[key] for key in allowed if key in value}
+async def _list_projected(
+    client: VcenterTargetClient,
+    tool_name: str,
+    *,
+    allowed: Sequence[str],
+    label: str,
+    query: Mapping[str, object] | None = None,
+    identifier_key: str | None = None,
+) -> dict[str, object]:
+    raw = await client.request_read(tool_name, query=query)
+    if not isinstance(raw, list):
+        raise UpstreamProtocolError(
+            f"vCenter {label} list was not a list", target_id=client.target_id
+        )
+    client.enforce_list_cap(len(raw))
+    projected: list[dict[str, object]] = []
+    for item in raw:
+        if identifier_key is not None and isinstance(item, str):
+            projected.append({identifier_key: item})
+            continue
+        if not isinstance(item, dict):
+            raise UpstreamProtocolError(
+                f"vCenter {label} list contained a non-object",
+                target_id=client.target_id,
+            )
+        projected.append({key: item[key] for key in allowed if key in item})
+    return {"items": projected, "count": len(projected)}
+
+
+async def _get_projected(
+    client: VcenterTargetClient,
+    tool_name: str,
+    *,
+    path_parameters: Mapping[str, str],
+    allowed: Sequence[str],
+    label: str,
+) -> dict[str, object]:
+    raw = await client.request_read(tool_name, path_parameters=path_parameters)
+    if not isinstance(raw, dict):
+        raise UpstreamProtocolError(
+            f"vCenter {label} detail was not an object", target_id=client.target_id
+        )
+    return {key: raw[key] for key in allowed if key in raw}

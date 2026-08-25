@@ -48,7 +48,6 @@ BUILTIN_BACKENDS = frozenset(
     }
 )
 MINIMUM_TOOL_COUNT = 19
-LEGACY_TOOL_COUNT_EXEMPTIONS = frozenset({BackendKind.VCENTER})
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,10 +143,7 @@ def _load_pack_directory(
             names = [tool.name for tool in tools]
             if len(names) != len(set(names)) or not names:
                 raise ValueError("pack tool names must be non-empty and unique")
-            if (
-                backend not in LEGACY_TOOL_COUNT_EXEMPTIONS
-                and len(tools) < MINIMUM_TOOL_COUNT
-            ):
+            if len(tools) < MINIMUM_TOOL_COUNT:
                 raise ValueError(
                     f"backend packs require at least {MINIMUM_TOOL_COUNT} tools"
                 )

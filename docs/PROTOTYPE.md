@@ -12,8 +12,8 @@ built-in product:
 
 - `/ops/mcp` exposes the 19 existing typed Operations read tools when an
   Operations target was registered before process start.
-- `/vcenter/mcp` exposes a typed vCenter inventory starter surface when a
-  vCenter target was registered before process start.
+- `/vcenter/mcp` exposes 19 typed vCenter inventory reads when a vCenter target
+  was registered before process start.
 - `/nsx/mcp`, `/sddc-manager/mcp`, `/ops-networks/mcp`, `/fleet-lcm/mcp`,
   `/sddc-lcm/mcp`, `/log-management/mcp`, and `/vsan-dp/mcp` each expose 19
   typed read tools when their matching target was registered before process
@@ -60,7 +60,8 @@ fixtures prove:
 - enabling TLS verification selects request cancellation, not draining
 - vCenter performs one bounded reauthentication on 401 and none on 403
 - response projections discard undeclared upstream fields
-- all seven added estate endpoints publish exactly 19 typed tools
+- all nine built-in product packs publish exactly 19 distinct typed tools,
+  without compressing or collapsing list and get operations
 - Basic auth, SDDC token acquisition, Ops bearer acquisition, Ops token
   exchange, static bearer, and vCenter session auth are fixture-proven
 - an operator-supplied 19-tool pack loads alongside the official set and cannot

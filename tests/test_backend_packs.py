@@ -21,6 +21,28 @@ REMAINING_OFFICIAL = frozenset(
     }
 )
 
+VCENTER_CONTRACTS = {
+    "list_vcenter_vms": ("/api/vcenter/vm", {"vms", "names", "folders", "datacenters", "hosts", "clusters", "resource_pools", "power_states"}),
+    "get_vcenter_vm": ("/api/vcenter/vm/{vm}", set()),
+    "list_vcenter_hosts": ("/api/vcenter/host", {"hosts", "names", "folders", "datacenters", "clusters", "connection_states", "host_uuids"}),
+    "list_vcenter_clusters": ("/api/vcenter/cluster", {"clusters", "names", "folders", "datacenters"}),
+    "get_vcenter_cluster": ("/api/vcenter/cluster/{cluster}", set()),
+    "list_vcenter_datacenters": ("/api/vcenter/datacenter", {"datacenters", "names", "folders"}),
+    "get_vcenter_datacenter": ("/api/vcenter/datacenter/{datacenter}", set()),
+    "list_vcenter_datastores": ("/api/vcenter/datastore", {"datastores", "names", "types", "folders", "datacenters"}),
+    "get_vcenter_datastore": ("/api/vcenter/datastore/{datastore}", set()),
+    "list_vcenter_resource_pools": ("/api/vcenter/resource-pool", {"resource_pools", "names", "parent_resource_pools", "datacenters", "hosts", "clusters"}),
+    "get_vcenter_resource_pool": ("/api/vcenter/resource-pool/{resourcePool}", set()),
+    "list_vcenter_folders": ("/api/vcenter/folder", {"folders", "names", "parent_folders", "datacenters"}),
+    "list_vcenter_networks": ("/api/vcenter/network", {"networks", "names", "types", "folders", "datacenters"}),
+    "list_vcenter_storage_policies": ("/api/vcenter/storage/policies", {"policies"}),
+    "list_vcenter_content_libraries": ("/api/content/library", set()),
+    "get_vcenter_content_library": ("/api/content/library/{libraryId}", set()),
+    "list_vcenter_content_library_items": ("/api/content/library/item", {"library_id"}),
+    "get_vcenter_content_library_item": ("/api/content/library/item/{libraryItemId}", set()),
+    "get_vcenter_session": ("/api/session", set()),
+}
+
 
 def test_remaining_official_backends_ship_as_nineteen_tool_packs() -> None:
     packs = load_backend_packs()
@@ -33,6 +55,27 @@ def test_remaining_official_backends_ship_as_nineteen_tool_packs() -> None:
         assert "vmware/vcf-api-specs" in pack.source
         assert "NiranEC77" not in pack.source
         assert all(tool.response_keys for tool in pack.tools)
+
+
+def test_all_nine_builtin_products_ship_exactly_nineteen_tools() -> None:
+    packs = load_backend_packs()
+
+    assert len(packs) == 9
+    assert all(len(pack.tools) == 19 for pack in packs.values())
+
+
+def test_vcenter_pack_freezes_nineteen_distinct_official_get_contracts() -> None:
+    pack = load_backend_packs()[BackendKind.VCENTER]
+
+    assert len(VCENTER_CONTRACTS) == 19
+    assert {tool.name for tool in pack.tools} == set(VCENTER_CONTRACTS)
+    assert "vmware/vcf-api-specs" in pack.source
+    assert "vcenter.yaml" in pack.source
+    for tool in pack.tools:
+        expected_path, expected_query = VCENTER_CONTRACTS[tool.name]
+        assert tool.method == "GET"
+        assert tool.path == expected_path
+        assert tool.query == expected_query
 
 
 def test_operator_pack_loads_alongside_official_set(tmp_path: Path) -> None:
