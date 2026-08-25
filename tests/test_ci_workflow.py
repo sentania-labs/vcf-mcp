@@ -51,6 +51,21 @@ def test_release_publishes_and_anonymously_pulls_a_versioned_image() -> None:
     assert 'gh release create "$GITHUB_REF_NAME"' in text
 
 
+def test_image_builds_use_the_shared_remote_buildkit() -> None:
+    for workflow in (BUILD_WORKFLOW, RELEASE_WORKFLOW):
+        text = workflow.read_text()
+        setup_buildx = text.split("- name: Set up Docker Buildx", 1)[1].split(
+            "- name: Login to GitHub Container Registry", 1
+        )[0]
+        assert "docker/setup-buildx-action@v3" in setup_buildx
+        assert "driver: remote" in setup_buildx
+        assert (
+            "endpoint: tcp://buildkitd.buildkit.svc.cluster.local:1234"
+            in setup_buildx
+        )
+        assert "docker/build-push-action@v6" in text
+
+
 def test_every_workflow_job_targets_the_lab_runner_pool() -> None:
     for workflow in WORKFLOW_DIR.glob("*.yml"):
         for line in workflow.read_text().splitlines():
