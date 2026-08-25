@@ -45,8 +45,9 @@ EXPOSE 8000
 
 # The root filesystem will be read-only in production, so we only write to volumes.
 #
-# The entry point is the composition root in vcf_mcp.main, never
-# vcf_mcp.app:create_app directly. --factory calls its factory with no
-# arguments, so create_app would take its audit_repository default of None
-# and /healthz would answer 503 forever. See src/vcf_mcp/main.py.
+# The entry point is vcf_mcp.runner, which composes the app through the
+# composition root in vcf_mcp.main and owns the admin-console clean restart
+# (exit 0 so the platform restarts the container). Never start
+# vcf_mcp.app:create_app directly: called with no arguments it would take its
+# audit_repository default of None and /healthz would answer 503 forever.
 CMD ["python", "-m", "vcf_mcp.runner"]
