@@ -7,21 +7,26 @@ from proof that requires Scott's lab.
 ## Summary
 
 This change replaces the single `/mcp` VCF Operations surface with startup
-composition for three endpoints:
+composition for one management endpoint and a separate endpoint for every
+built-in product:
 
 - `/ops/mcp` exposes the 19 existing typed Operations read tools when an
   Operations target was registered before process start.
 - `/vcenter/mcp` exposes a typed vCenter inventory starter surface when a
   vCenter target was registered before process start.
+- `/nsx/mcp`, `/sddc-manager/mcp`, `/ops-networks/mcp`, `/fleet-lcm/mcp`,
+  `/sddc-lcm/mcp`, `/log-management/mcp`, and `/vsan-dp/mcp` each expose 19
+  typed read tools when their matching target was registered before process
+  start.
 - `/vcf/mcp` exposes only management, health, history, and skills reads.
 
-Operations and vCenter are carried by separate unsigned, data-only backend
-packs. The packs declare their product, tool schemas, paths, HTTP methods,
+Every product is carried by a separate unsigned, data-only backend pack. The
+packs declare their product, tool schemas, paths, HTTP methods,
 allowed query and body keys, projections, caps, and auth scheme. Tool handlers
 are still static code, and a tool is published only after it is registered with
 the mandatory dispatcher.
 
-The admin UI now supports target registration and editing for both products.
+The admin UI supports target registration and editing for every built-in product.
 An operator can change an existing target's name, FQDN, credentials, posture,
 root CA, and TLS verification policy. Credential rotation and root CA storage
 use the existing AES-256-GCM keyring path. The unsigned prototype refuses every
@@ -55,6 +60,11 @@ fixtures prove:
 - enabling TLS verification selects request cancellation, not draining
 - vCenter performs one bounded reauthentication on 401 and none on 403
 - response projections discard undeclared upstream fields
+- all seven added estate endpoints publish exactly 19 typed tools
+- Basic auth, SDDC token acquisition, Ops bearer acquisition, Ops token
+  exchange, static bearer, and vCenter session auth are fixture-proven
+- an operator-supplied 19-tool pack loads alongside the official set and cannot
+  replace an official product pack
 
 Run the proof with:
 
@@ -76,23 +86,28 @@ cannot arm a target. Gate 3 remains a later production read-only registration.
 The following cannot be proven from this worktree because it cannot reach the
 lab, and no lab credentials were requested:
 
-1. Register the Operations devel appliance and vCenter devel appliance in the
-   admin UI, then restart the container to freeze both product endpoints.
+1. Register each available devel appliance in the admin UI, then restart the
+   container to freeze its product endpoint.
 2. Upload the appropriate CA bundle for each, enable verification, and confirm
-   a typed inventory call returns real data from `/ops/mcp` and `/vcenter/mcp`.
-3. Call one tool from each implemented Operations family and one vCenter tool,
-   then confirm each attempt and terminal row identifies its endpoint and pack.
-4. Revoke the key and confirm its next request is rejected.
-5. Restart the container and confirm target credential decryption and audit
+   one typed call returns real data from every registered product endpoint.
+3. Confirm the bearer source for Fleet Lifecycle and SDDC Lifecycle, the
+   Operations for Networks bearer flow, the Log Management exchange flow, and
+   the exact SDDC Manager and vSAN session response shapes.
+4. Call one tool from every implemented product, then confirm each attempt and
+   terminal row identifies its endpoint and pack.
+5. Revoke the key and confirm its next request is rejected.
+6. Restart the container and confirm target credential decryption and audit
    continuity.
-6. Restore the runtime database with the separately held keyring and confirm
+7. Restore the runtime database with the separately held keyring and confirm
    the same continuity.
-7. Exercise both Streamable HTTP endpoints through the lab reverse proxy to
+8. Exercise the Streamable HTTP endpoints through the lab reverse proxy to
    check buffering, idle timeout, header forwarding, and reconnect behavior.
 
 Until that packet is complete, compatibility with the real appliance versions,
-lab CA chain, live permissions, response shapes, reverse proxy, restart, and
-restore behavior remains unproven.
+base paths, authentication exchanges, lab CA chain, live permissions, response
+shapes, reverse proxy, restart, and restore behavior remains unproven. The
+worktree had no route to the captain's appliances, and no lab credentials were
+requested or used.
 
 ## Deliberately deferred
 

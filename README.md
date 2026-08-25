@@ -6,9 +6,17 @@ registered product:
 
 - `/ops/mcp` for VCF Operations
 - `/vcenter/mcp` for vCenter Server
+- `/nsx/mcp` for NSX
+- `/sddc-manager/mcp` for SDDC Manager
+- `/ops-networks/mcp` for VCF Operations for Networks
+- `/fleet-lcm/mcp` for VCF Fleet Lifecycle
+- `/sddc-lcm/mcp` for VCF SDDC Lifecycle
+- `/log-management/mcp` for VCF Log Management
+- `/vsan-dp/mcp` for vSAN Data Protection
 - `/vcf/mcp` for read-only management information
 
-The Operations and vCenter definitions are unsigned, data-only backend packs.
+The product definitions are unsigned, data-only backend packs. Each of the
+seven estate packs added after the initial prototype publishes 19 typed tools.
 Each product endpoint exposes only its own typed tools. A backend that has no
 registered target at process start has no endpoint and contributes no tools.
 Every tool call still crosses the mandatory authorization and durable audit
@@ -19,7 +27,7 @@ offering.
 
 ## What the prototype proves
 
-- The admin UI registers Operations and vCenter targets, edits their display
+- The admin UI registers every built-in backend target, edits its display
   name, FQDN, credentials, posture, root CA, and per-target TLS policy.
 - New targets start with TLS verification disabled. The UI labels that state
   plainly. An operator can upload a PEM root CA and enable verification for
@@ -37,9 +45,10 @@ offering.
   history. History is filtered by both the presenting key and
   `X-VCF-Caller-ID`, and returns nothing without that caller header.
 
-Fixture tests make typed calls against both product endpoints using different
-authentication flows, OpsToken for Operations and a vCenter session ID for
-vCenter. They do not contact a lab appliance.
+Fixture tests make typed calls using Basic authentication, OpsToken, bearer
+tokens, SDDC Manager token pairs, VCF Operations token exchange, and vCenter
+session IDs. They also prove that an operator pack can load alongside the
+official built-in set. They do not contact a lab appliance.
 
 ## Prototype boundary
 
@@ -54,14 +63,18 @@ following production work is deliberately deferred:
 - response redaction
 - token-budget warnings and install refusal
 
-The built-in packs load from disk and are unsigned-only. The server refuses to
+The built-in packs load from disk and are unsigned-only. The validated loader
+also accepts operator-supplied pack definitions alongside the official set,
+without allowing them to replace a built-in product. The server refuses to
 put any target into an actions-enabled posture while unsigned packs are in use.
 Fingerprint pinning is intentionally not implemented. Uploaded CA bundles are
 the trust mechanism.
 
 The fixture proof cannot establish the following without Scott's hardware:
 
-- compatibility with the real Operations and vCenter versions in the lab
+- compatibility with the real product versions and endpoint base paths in the lab
+- the bearer-token source expected by Fleet Lifecycle and SDDC Lifecycle
+- Log Management token exchange and Operations for Networks bearer behavior
 - successful TLS handshakes against the lab CA chain
 - the exact response shapes and permissions of the devel appliances
 - Streamable HTTP behavior through the lab reverse proxy
@@ -84,7 +97,7 @@ python3 -m venv .venv
 ```
 
 The live-appliance tier remains skipped unless its explicit guard variables are
-provided. Normal tests use synthetic Operations and vCenter responses only.
+provided. Normal tests use synthetic appliance responses only.
 
 ## Build and start the container
 
@@ -131,13 +144,13 @@ exit
 
 Open `http://localhost:8000/admin/login` and sign in as `admin`.
 
-1. Register one Operations target and one vCenter target. Leave TLS disabled
+1. Register the product targets needed by this appliance. Leave TLS disabled
    only until the correct CA is uploaded.
 2. Restart the container. Backend packs are selected and tool registries are
    frozen at startup, so the first registration for a product needs a restart.
 3. Edit each target, upload its CA bundle, enable TLS verification, and save.
-4. Mint a key with `/ops/mcp`, `/vcenter/mcp`, and `/vcf/mcp` endpoint access,
-   explicit read capabilities, and both targets.
+4. Mint a key with the required product endpoints plus `/vcf/mcp`, explicit
+   read capabilities, and matching targets.
 5. Configure MCP clients with `Authorization: Bearer <displayed-key>` and the
    endpoint URL. The plaintext key is displayed once.
 6. Use `/vcf/mcp` `list_targets` to obtain target IDs, then call a typed tool on

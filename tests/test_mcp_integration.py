@@ -13,6 +13,7 @@ from vcf_ops_mcp.app import create_app
 from vcf_ops_mcp.audit import SqliteAuditRepository
 from vcf_ops_mcp.backend_packs import load_backend_packs
 from vcf_ops_mcp.contracts import BackendKind, Capability
+from vcf_ops_mcp.declared_backend import DeclaredBackendClient
 from vcf_ops_mcp.mcp_server import build_mcp_surfaces, implemented_scopes
 from vcf_ops_mcp.runtime_repository import RuntimeRepository
 from vcf_ops_mcp.skills import load_catalog
@@ -395,6 +396,180 @@ def test_unregistered_backend_contributes_no_endpoint(tmp_path: Path) -> None:
     )
     try:
         assert set(surfaces.by_endpoint) == {"ops", "vcf"}
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_remaining_estate_publishes_nineteen_tools_per_wired_endpoint(
+    tmp_path: Path,
+) -> None:
+    packs = load_backend_packs()
+    remaining = (
+        BackendKind.NSX,
+        BackendKind.SDDC_MANAGER,
+        BackendKind.OPS_NETWORKS,
+        BackendKind.FLEET_LCM,
+        BackendKind.SDDC_LCM,
+        BackendKind.LOG_MANAGEMENT,
+        BackendKind.VSAN_DP,
+    )
+    runtime = RuntimeRepository(
+        tmp_path / "data.sqlite3",
+        tmp_path / "keyring.json",
+        grantable_scopes=implemented_scopes(packs),
+    )
+    runtime.bootstrap()
+    targets = []
+    for backend in remaining:
+        targets.append(
+            asyncio.run(
+                runtime.create_target(
+                    name=f"fixture-{backend.value}",
+                    fqdn=f"{backend.value}.example.internal",
+                    username="synthetic",
+                    password="synthetic-password",
+                    auth_source="LOCAL",
+                    verify_ssl=False,
+                    backend=backend,
+                )
+            )
+        )
+    key = asyncio.run(
+        runtime.create_api_key(
+            label="estate",
+            scopes=asyncio.run(runtime.grantable_scopes()),
+            allowed_targets=frozenset(target.id for target in targets),
+            allowed_endpoints=frozenset({"vcf", *(kind.value for kind in remaining)}),
+        )
+    )
+    audit = SqliteAuditRepository(tmp_path / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    surfaces = build_mcp_surfaces(
+        runtime_repository=runtime,
+        audit_repository=audit,
+        skills=load_catalog(ROOT / "skills"),
+        digest_key=hashlib.sha256(b"estate-digest").digest(),
+        public_base_url="http://testserver",
+        packs=packs,
+    )
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_surfaces=surfaces,
+    )
+    try:
+        with TestClient(app) as client:
+            for backend in remaining:
+                tools = rpc(client, backend.value, key, "tools/list", {}).json()[
+                    "result"
+                ]["tools"]
+                assert len(tools) == 19
+                assert {tool["name"] for tool in tools} == {
+                    tool.name for tool in packs[backend].tools
+                }
+        assert set(surfaces.by_endpoint) == {
+            "vcf",
+            *(kind.value for kind in remaining),
+        }
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_nsx_typed_call_crosses_dispatcher_and_durable_audit(tmp_path: Path) -> None:
+    packs = load_backend_packs()
+    runtime = RuntimeRepository(
+        tmp_path / "data.sqlite3",
+        tmp_path / "keyring.json",
+        grantable_scopes=implemented_scopes(packs),
+    )
+    runtime.bootstrap()
+    nsx = asyncio.run(
+        runtime.create_target(
+            name="fixture-nsx",
+            fqdn="nsx.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+            backend=BackendKind.NSX,
+        )
+    )
+    key = asyncio.run(
+        runtime.create_api_key(
+            label="nsx-call",
+            scopes=frozenset({Capability.READ_NETWORK}),
+            allowed_targets=frozenset({nsx.id}),
+            allowed_endpoints=frozenset({BackendKind.NSX.value}),
+        )
+    )
+    audit = SqliteAuditRepository(tmp_path / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/policy/api/v1/infra/segments"
+        assert dict(request.url.params) == {"page_size": "2"}
+        assert request.headers["authorization"].startswith("Basic ")
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"id": "segment-1", "display_name": "fixture"}],
+                "result_count": 1,
+                "credential": "must-not-pass",
+            },
+        )
+
+    def nsx_factory(target, credentials: TargetCredentials, _root_ca):
+        return DeclaredBackendClient(
+            target=target,
+            credentials=credentials,
+            pack=packs[BackendKind.NSX],
+            http_client=httpx.AsyncClient(
+                base_url=f"https://{target.fqdn}",
+                transport=httpx.MockTransport(appliance),
+            ),
+        )
+
+    surfaces = build_mcp_surfaces(
+        runtime_repository=runtime,
+        audit_repository=audit,
+        skills=load_catalog(ROOT / "skills"),
+        digest_key=hashlib.sha256(b"nsx-call-digest").digest(),
+        public_base_url="http://testserver",
+        client_factories={BackendKind.NSX: nsx_factory},
+        packs=packs,
+    )
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_surfaces=surfaces,
+    )
+    try:
+        with TestClient(app) as client:
+            result = structured(
+                rpc(
+                    client,
+                    BackendKind.NSX.value,
+                    key,
+                    "tools/call",
+                    {
+                        "name": "list_nsx_segments",
+                        "arguments": {"target_id": str(nsx.id), "page_size": 2},
+                    },
+                )
+            )
+        assert result["state"] == "ok"
+        assert result["result"] == {
+            "results": [{"id": "segment-1", "display_name": "fixture"}],
+            "result_count": 1,
+        }
+        records = asyncio.run(audit.recent_records(limit=1))
+        assert records[0].endpoint_name == BackendKind.NSX.value
+        assert records[0].pack_id == packs[BackendKind.NSX].pack_id
+        assert records[0].pack_digest == packs[BackendKind.NSX].digest
     finally:
         runtime.close()
         audit.close()

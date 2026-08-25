@@ -36,6 +36,10 @@ from vcf_ops_mcp.audit import (
     audit_db_path_from_environment,
 )
 from vcf_ops_mcp.mcp_server import build_mcp_surfaces, implemented_scopes
+from vcf_ops_mcp.backend_packs import (
+    DEFAULT_OPERATOR_PACKS_PATH,
+    load_backend_packs,
+)
 from vcf_ops_mcp.runtime_repository import (
     RuntimeRepository,
     admin_bootstrap_path_from_environment,
@@ -113,13 +117,21 @@ def create_production_app() -> Starlette:
     else:
         LOGGER.info("audit argument digest key is ready")
 
+    packs = None
+    pack_configuration_ready = True
+    try:
+        packs = load_backend_packs(operator_path=DEFAULT_OPERATOR_PACKS_PATH)
+    except Exception:
+        LOGGER.exception("backend packs could not be loaded; starting degraded")
+        pack_configuration_ready = False
+
     runtime_repository = RuntimeRepository(
         config_db_path_from_environment(),
         credential_keyring_path_from_environment(),
-        grantable_scopes=implemented_scopes(),
+        grantable_scopes=implemented_scopes(packs),
         bootstrap_password_path=admin_bootstrap_path_from_environment(),
     )
-    configuration_ready = True
+    configuration_ready = pack_configuration_ready
     try:
         runtime_repository.bootstrap()
     except Exception:
@@ -154,6 +166,7 @@ def create_production_app() -> Starlette:
                 skills=skills,
                 digest_key=audit_digest_key,
                 public_base_url=public_base_url,
+                packs=packs,
             )
         except Exception:
             LOGGER.exception("authenticated MCP surface could not be built")

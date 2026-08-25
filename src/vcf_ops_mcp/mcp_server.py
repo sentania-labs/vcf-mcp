@@ -9,6 +9,7 @@ import shutil
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -22,10 +23,13 @@ from starlette.applications import Starlette
 from vcf_ops_mcp.audit import SqliteAuditRepository
 from vcf_ops_mcp.backend_packs import (
     BackendPack,
+    DEFAULT_OPERATOR_PACKS_PATH,
     PackArgument,
     PackTool,
     load_backend_packs,
 )
+from vcf_ops_mcp.declared_backend import DeclaredBackendClient
+from vcf_ops_mcp.declared_backend import handlers_for_pack as declared_handlers
 from vcf_ops_mcp.contracts import (
     BackendKind,
     Capability,
@@ -177,12 +181,19 @@ class BackendClientPool:
                 allowlist=allowlist,
                 root_ca_pem=root_ca,
             )
-        tools = {tool.name: tool for tool in self._pack.tools}
-        return VcenterTargetClient(
+        if self._pack.backend is BackendKind.VCENTER:
+            tools = {tool.name: tool for tool in self._pack.tools}
+            return VcenterTargetClient(
+                target=target,
+                credentials=credentials,
+                tools=tools,
+                caps=self._pack.caps,
+                root_ca_pem=root_ca,
+            )
+        return DeclaredBackendClient(
             target=target,
             credentials=credentials,
-            tools=tools,
-            caps=self._pack.caps,
+            pack=self._pack,
             root_ca_pem=root_ca,
         )
 
@@ -253,6 +264,7 @@ class McpSurface:
 class McpSurfaces:
     by_endpoint: Mapping[str, McpSurface]
     invalidator: CompositeInvalidator
+    packs: Mapping[BackendKind, BackendPack]
 
 
 def build_mcp_surfaces(
@@ -263,16 +275,22 @@ def build_mcp_surfaces(
     digest_key: bytes,
     public_base_url: str,
     client_factories: Mapping[BackendKind, Callable[..., object]] | None = None,
+    packs: Mapping[BackendKind, BackendPack] | None = None,
+    operator_pack_path: Path | None = DEFAULT_OPERATOR_PACKS_PATH,
 ) -> McpSurfaces:
     """Enumerate registered backends and freeze one tool surface per backend."""
 
-    packs = load_backend_packs()
+    loaded_packs = dict(
+        packs
+        if packs is not None
+        else load_backend_packs(operator_path=operator_pack_path)
+    )
     targets = runtime_repository.list_at_startup()
     wired = frozenset(target.backend for target in targets)
     pools: list[BackendClientPool] = []
     surfaces: dict[str, McpSurface] = {}
     for backend in sorted(wired, key=lambda value: value.value):
-        pack = packs[backend]
+        pack = loaded_packs[backend]
         pool = BackendClientPool(
             runtime_repository,
             pack,
@@ -293,10 +311,14 @@ def build_mcp_surfaces(
         skills=skills,
         digest_key=digest_key,
         public_base_url=public_base_url,
-        packs=packs,
+        packs=loaded_packs,
         wired=wired,
     )
-    return McpSurfaces(surfaces, CompositeInvalidator(tuple(pools)))
+    return McpSurfaces(
+        surfaces,
+        CompositeInvalidator(tuple(pools)),
+        loaded_packs,
+    )
 
 
 def build_mcp_surface(
@@ -618,10 +640,18 @@ def _build_management_surface(
     )
 
 
-def implemented_scopes() -> frozenset[CapabilityName]:
+def implemented_scopes(
+    packs: Mapping[BackendKind, BackendPack] | None = None,
+) -> frozenset[CapabilityName]:
+    loaded_packs = packs or load_backend_packs()
     return frozenset(
         {
             *(adapter.capability for adapter in READ_ADAPTERS),
+            *(
+                tool.capability
+                for pack in loaded_packs.values()
+                for tool in pack.tools
+            ),
             Capability.READ_TARGETS,
             Capability.READ_SKILLS,
         }
@@ -701,9 +731,11 @@ def _handlers_for_pack(pack: BackendPack) -> Mapping[str, Callable[..., Any]]:
             ):
                 raise ValueError(f"Operations pack contract drift for {tool.name}")
         return handlers
-    if set(VCENTER_HANDLERS) != {tool.name for tool in pack.tools}:
-        raise ValueError("vCenter handlers and pack tool definitions differ")
-    return VCENTER_HANDLERS
+    if pack.backend is BackendKind.VCENTER:
+        if set(VCENTER_HANDLERS) != {tool.name for tool in pack.tools}:
+            raise ValueError("vCenter handlers and pack tool definitions differ")
+        return VCENTER_HANDLERS
+    return declared_handlers(pack)
 
 
 def _accepts_root_ca(factory: Callable[..., object]) -> bool:

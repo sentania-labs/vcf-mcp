@@ -49,7 +49,7 @@ DEFAULT_CONFIG_DB_PATH = Path("/data/config.sqlite3")
 DEFAULT_CREDENTIAL_KEYRING_PATH = Path("/keys/credential_keyring.json")
 DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE = Path("/keys/admin_bootstrap_password")
 PRODUCTION_FQDN = "vcf-lab-operations.int.sentania.net"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ENVELOPE_SCHEMA_VERSION = 1
 KEYRING_VERSION = 1
 MINIMUM_ADMIN_PASSWORD_BYTES = 16
@@ -301,7 +301,11 @@ class RuntimeRepository:
                 username_envelope TEXT NOT NULL,
                 password_envelope TEXT NOT NULL,
                 backend TEXT NOT NULL DEFAULT 'ops'
-                    CHECK (backend IN ('ops', 'vcenter')),
+                    CHECK (backend IN (
+                        'ops', 'vcenter', 'nsx', 'sddc-manager', 'ops-networks',
+                        'fleet-lcm', 'sddc-lcm', 'log-management', 'vsan-dp',
+                        'avi', 'automation', 'identity-broker', 'software-depot'
+                    )),
                 root_ca_envelope TEXT
             );
             CREATE TABLE IF NOT EXISTS api_keys (
@@ -328,7 +332,10 @@ class RuntimeRepository:
             try:
                 connection.execute(
                     "ALTER TABLE targets ADD COLUMN backend TEXT NOT NULL"
-                    " DEFAULT 'ops' CHECK (backend IN ('ops', 'vcenter'))"
+                    " DEFAULT 'ops' CHECK (backend IN ("
+                    "'ops','vcenter','nsx','sddc-manager','ops-networks',"
+                    "'fleet-lcm','sddc-lcm','log-management','vsan-dp',"
+                    "'avi','automation','identity-broker','software-depot'))"
                 )
                 connection.execute(
                     "ALTER TABLE targets ADD COLUMN root_ca_envelope TEXT"
@@ -340,6 +347,58 @@ class RuntimeRepository:
                 connection.execute(
                     "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
                 )
+            except BaseException:
+                connection.rollback()
+                raise
+        elif row[0] == 2:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE targets_v3 (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        fqdn TEXT NOT NULL UNIQUE,
+                        posture TEXT NOT NULL CHECK (posture = 'read_only'),
+                        is_prod INTEGER NOT NULL CHECK (is_prod IN (0, 1)),
+                        verify_ssl INTEGER NOT NULL CHECK (verify_ssl IN (0, 1)),
+                        auth_source TEXT NOT NULL,
+                        configuration_generation INTEGER NOT NULL,
+                        username_envelope TEXT NOT NULL,
+                        password_envelope TEXT NOT NULL,
+                        backend TEXT NOT NULL DEFAULT 'ops'
+                            CHECK (backend IN (
+                                'ops', 'vcenter', 'nsx', 'sddc-manager',
+                                'ops-networks', 'fleet-lcm', 'sddc-lcm',
+                                'log-management', 'vsan-dp', 'avi', 'automation',
+                                'identity-broker', 'software-depot'
+                            )),
+                        root_ca_envelope TEXT
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO targets_v3(
+                        id, name, fqdn, posture, is_prod, verify_ssl,
+                        auth_source, configuration_generation,
+                        username_envelope, password_envelope, backend,
+                        root_ca_envelope
+                    )
+                    SELECT
+                        id, name, fqdn, posture, is_prod, verify_ssl,
+                        auth_source, configuration_generation,
+                        username_envelope, password_envelope, backend,
+                        root_ca_envelope
+                    FROM targets
+                    """
+                )
+                connection.execute("DROP TABLE targets")
+                connection.execute("ALTER TABLE targets_v3 RENAME TO targets")
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
+                )
+                connection.commit()
             except BaseException:
                 connection.rollback()
                 raise

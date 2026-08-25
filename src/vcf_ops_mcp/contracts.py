@@ -27,6 +27,10 @@ class Capability(StrEnum):
     READ_METRICS = "read:metrics"
     READ_ALERTS = "read:alerts"
     READ_REPORTS = "read:reports"
+    READ_NETWORK = "read:network"
+    READ_LIFECYCLE = "read:lifecycle"
+    READ_LOGS = "read:logs"
+    READ_PROTECTION = "read:protection"
     READ_SKILLS = "read:skills"
     READ_TARGETS = "read:targets"
 
@@ -45,10 +49,21 @@ class TargetPosture(StrEnum):
 
 
 class BackendKind(StrEnum):
-    """Static backend families available in the prototype."""
+    """Static backend identities understood by the appliance."""
 
     OPS = "ops"
     VCENTER = "vcenter"
+    NSX = "nsx"
+    SDDC_MANAGER = "sddc-manager"
+    OPS_NETWORKS = "ops-networks"
+    FLEET_LCM = "fleet-lcm"
+    SDDC_LCM = "sddc-lcm"
+    LOG_MANAGEMENT = "log-management"
+    VSAN_DP = "vsan-dp"
+    AVI = "avi"
+    AUTOMATION = "automation"
+    IDENTITY_BROKER = "identity-broker"
+    SOFTWARE_DEPOT = "software-depot"
 
 
 @dataclass(frozen=True, slots=True)
