@@ -9,12 +9,13 @@ import httpx
 
 from vcf_ops_mcp.backend_packs import PackTool
 from vcf_ops_mcp.contracts import ConfigurationGeneration, TargetId, TargetRecord
-from vcf_ops_mcp.vcf.caps import enforce_response_size
+from vcf_ops_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
 from vcf_ops_mcp.vcf.client import TargetCredentials, build_tls_verifier
 from vcf_ops_mcp.vcf.errors import (
     AuthenticationError,
     PermissionDeniedError,
     ReauthenticationExhausted,
+    ResultCapExceeded,
     TargetConfigurationSuperseded,
     UpstreamProtocolError,
     UpstreamStatusError,
@@ -27,6 +28,7 @@ SESSION_PATH = "/api/session"
 SESSION_HEADER = "vmware-api-session-id"
 MAX_REAUTHENTICATIONS_PER_REQUEST = 1
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=10)
+DEFAULT_MAX_LIST_ITEMS = 4_000
 
 
 class VcenterTargetClient:
@@ -38,12 +40,20 @@ class VcenterTargetClient:
         target: TargetRecord,
         credentials: TargetCredentials,
         tools: Mapping[str, PackTool],
+        caps: Mapping[str, int] | None = None,
         root_ca_pem: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._target = target
         self._credentials = credentials
         self._tools = dict(tools)
+        declared_caps = caps or {}
+        self._max_list_items = int(
+            declared_caps.get("max_list_items", DEFAULT_MAX_LIST_ITEMS)
+        )
+        self._max_response_bytes = int(
+            declared_caps.get("max_response_bytes", MAX_UPSTREAM_RESPONSE_BYTES)
+        )
         self._http = http_client or httpx.AsyncClient(
             base_url=f"https://{target.fqdn}",
             verify=build_tls_verifier(target, root_ca_pem),
@@ -175,7 +185,8 @@ class VcenterTargetClient:
         self, path: str, query: Mapping[str, object], session_id: str
     ) -> httpx.Response:
         try:
-            response = await self._http.get(
+            request = self._http.build_request(
+                "GET",
                 path,
                 params=query or None,
                 headers={
@@ -183,15 +194,52 @@ class VcenterTargetClient:
                     SESSION_HEADER: session_id,
                 },
             )
+            response = await self._http.send(request, stream=True)
         except httpx.HTTPError as exc:
             raise UpstreamUnavailableError(
                 f"vCenter could not be reached ({type(exc).__name__})",
                 target_id=self._target.id,
             ) from None
-        enforce_response_size(
-            byte_count=len(response.content), target_id=self._target.id
+        try:
+            content = await self._read_capped(response)
+        finally:
+            await response.aclose()
+        return httpx.Response(
+            status_code=response.status_code,
+            headers=_rebuffered_headers(response.headers),
+            content=content,
+            request=request,
         )
-        return response
+
+    async def _read_capped(self, response: httpx.Response) -> bytes:
+        buffered = bytearray()
+        try:
+            async for chunk in response.aiter_bytes():
+                buffered.extend(chunk)
+                if len(buffered) > self._max_response_bytes:
+                    raise ResultCapExceeded(
+                        cap_name="max_response_bytes",
+                        cap_value=self._max_response_bytes,
+                        requested=len(buffered),
+                        unit="bytes",
+                        target_id=self._target.id,
+                    )
+        except httpx.HTTPError as exc:
+            raise UpstreamUnavailableError(
+                f"vCenter could not be reached ({type(exc).__name__})",
+                target_id=self._target.id,
+            ) from None
+        return bytes(buffered)
+
+    def enforce_list_cap(self, item_count: int) -> None:
+        if item_count > self._max_list_items:
+            raise ResultCapExceeded(
+                cap_name="max_list_items",
+                cap_value=self._max_list_items,
+                requested=item_count,
+                unit="items",
+                target_id=self._target.id,
+            )
 
     def mark_closed(self) -> int:
         self._closed = True
@@ -257,6 +305,7 @@ async def list_vcenter_vms(
         },
     )
     items = raw if isinstance(raw, list) else []
+    client.enforce_list_cap(len(items))
     return {"items": [_project_vm_summary(item) for item in items], "count": len(items)}
 
 
@@ -292,6 +341,7 @@ async def list_vcenter_hosts(
         },
     )
     items = raw if isinstance(raw, list) else []
+    client.enforce_list_cap(len(items))
     allowed = ("host", "name", "connection_state", "power_state")
     projected = [
         {key: item[key] for key in allowed if key in item}
@@ -351,6 +401,13 @@ def _decode_json(response: httpx.Response, target_id: TargetId) -> object:
         raise UpstreamProtocolError(
             "vCenter returned a non-JSON success response", target_id=target_id
         ) from exc
+
+
+def _rebuffered_headers(headers: httpx.Headers) -> httpx.Headers:
+    rebuilt = httpx.Headers(headers)
+    rebuilt.pop("content-length", None)
+    rebuilt.pop("content-encoding", None)
+    return rebuilt
 
 
 def _project_vm_summary(value: object) -> dict[str, object]:

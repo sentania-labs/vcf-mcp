@@ -324,18 +324,25 @@ class RuntimeRepository:
                 (SCHEMA_VERSION,),
             )
         elif row[0] == 1:
-            connection.execute(
-                "ALTER TABLE targets ADD COLUMN backend TEXT NOT NULL"
-                " DEFAULT 'ops' CHECK (backend IN ('ops', 'vcenter'))"
-            )
-            connection.execute("ALTER TABLE targets ADD COLUMN root_ca_envelope TEXT")
-            connection.execute(
-                "ALTER TABLE api_keys ADD COLUMN allowed_endpoints_json TEXT"
-                ' NOT NULL DEFAULT \'["ops","vcf"]\''
-            )
-            connection.execute(
-                "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
-            )
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    "ALTER TABLE targets ADD COLUMN backend TEXT NOT NULL"
+                    " DEFAULT 'ops' CHECK (backend IN ('ops', 'vcenter'))"
+                )
+                connection.execute(
+                    "ALTER TABLE targets ADD COLUMN root_ca_envelope TEXT"
+                )
+                connection.execute(
+                    "ALTER TABLE api_keys ADD COLUMN allowed_endpoints_json TEXT"
+                    ' NOT NULL DEFAULT \'["ops","vcf"]\''
+                )
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
+                )
+            except BaseException:
+                connection.rollback()
+                raise
         elif row[0] != SCHEMA_VERSION:
             raise RuntimeStoreUnavailable(
                 f"unsupported runtime schema version {row[0]}"

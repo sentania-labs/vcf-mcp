@@ -151,6 +151,7 @@ class BackendClientPool:
             target=target,
             credentials=credentials,
             tools=tools,
+            caps=self._pack.caps,
             root_ca_pem=root_ca,
         )
 
@@ -167,6 +168,7 @@ class BackendClientPool:
             if client.configuration_generation >= change.current_generation:
                 return InvalidationResult(change, mode, 0, 0)
             inflight = client.mark_closed()
+            self._clients.pop(change.target_id, None)
         if mode is InvalidationMode.CANCEL:
             cancelled = await client.cancel()
             drained = 0
@@ -174,9 +176,6 @@ class BackendClientPool:
             await client.drain()
             drained = inflight
             cancelled = 0
-        async with self._lock:
-            if self._clients.get(change.target_id) is client:
-                self._clients.pop(change.target_id, None)
         await client.aclose()
         return InvalidationResult(change, mode, drained, cancelled)
 

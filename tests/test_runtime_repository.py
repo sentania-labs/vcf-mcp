@@ -151,6 +151,36 @@ async def test_v1_runtime_store_migrates_existing_credentials_and_key_scope(
     assert identity.allowed_endpoints == frozenset({"ops", "vcf"})
 
 
+def test_v1_schema_migration_rolls_back_every_column_on_failure(
+    repository: RuntimeRepository,
+) -> None:
+    database_path = repository.database_path
+    keyring_path = repository.keyring_path
+    repository.close()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE targets DROP COLUMN root_ca_envelope")
+        connection.execute("ALTER TABLE targets DROP COLUMN backend")
+        connection.execute("UPDATE schema_version SET version = 1")
+        connection.commit()
+
+    broken_migration = RuntimeRepository(
+        database_path,
+        keyring_path,
+        grantable_scopes=SCOPES,
+    )
+    with pytest.raises(RuntimeStoreUnavailable):
+        broken_migration.bootstrap()
+
+    with sqlite3.connect(database_path) as connection:
+        target_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(targets)")
+        }
+        version = connection.execute("SELECT version FROM schema_version").fetchone()
+    assert "backend" not in target_columns
+    assert "root_ca_envelope" not in target_columns
+    assert version == (1,)
+
+
 @pytest.mark.asyncio
 async def test_target_edit_rotates_credentials_and_ca_in_one_encrypted_store(
     repository: RuntimeRepository,
