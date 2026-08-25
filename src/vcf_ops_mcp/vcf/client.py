@@ -27,6 +27,7 @@ Measured behaviors this implementation is built on, all against
 from __future__ import annotations
 
 import asyncio
+import ssl
 import time
 from collections.abc import Callable, Mapping
 
@@ -84,6 +85,20 @@ TOKEN_RELEASE_TIMEOUT = httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0
 _JSON_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
 
 
+def build_tls_verifier(
+    target: TargetRecord, root_ca_pem: str | None
+) -> bool | ssl.SSLContext:
+    """Build one target's TLS policy without changing process-wide trust."""
+
+    if not target.verify_ssl:
+        return False
+    if root_ca_pem is None:
+        return True
+    context = ssl.create_default_context()
+    context.load_verify_locations(cadata=root_ca_pem)
+    return context
+
+
 class TargetCredentials:
     """Credential material for one target. Never logged, never repr'd."""
 
@@ -108,6 +123,11 @@ class TargetCredentials:
         if self.auth_source:
             payload["authSource"] = self.auth_source
         return payload
+
+    def basic_auth_tuple(self) -> tuple[str, str]:
+        """Return credentials only to an internal auth implementation."""
+
+        return self._username, self._password
 
 
 class _Token:
@@ -143,6 +163,7 @@ class VcfTargetClient:
         http_client: httpx.AsyncClient | None = None,
         now: Callable[[], float] = time.time,
         generation_source: Callable[[], ConfigurationGeneration | None] | None = None,
+        root_ca_pem: str | None = None,
     ) -> None:
         self._target = target
         self._credentials = credentials
@@ -151,7 +172,7 @@ class VcfTargetClient:
         self._generation_source = generation_source
         self._http = http_client or httpx.AsyncClient(
             base_url=f"https://{target.fqdn}{SUITE_API_ROOT}",
-            verify=target.verify_ssl,
+            verify=build_tls_verifier(target, root_ca_pem),
             timeout=DEFAULT_TIMEOUT,
         )
         self._auth_lock = asyncio.Lock()
@@ -509,7 +530,10 @@ class VcfTargetClient:
             try:
                 await self._http.post(
                     TOKEN_RELEASE_PATH,
-                    headers={**_JSON_HEADERS, "Authorization": f"OpsToken {token.value}"},
+                    headers={
+                        **_JSON_HEADERS,
+                        "Authorization": f"OpsToken {token.value}",
+                    },
                     timeout=TOKEN_RELEASE_TIMEOUT,
                 )
             except (httpx.HTTPError, asyncio.CancelledError):

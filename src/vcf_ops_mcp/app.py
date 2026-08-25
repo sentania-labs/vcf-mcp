@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -14,7 +15,7 @@ from starlette.routing import Mount, Route
 
 from vcf_ops_mcp.admin.routes import admin_routes
 from vcf_ops_mcp.contracts import AuditRepository
-from vcf_ops_mcp.mcp_server import McpSurface
+from vcf_ops_mcp.mcp_server import McpSurface, McpSurfaces
 from vcf_ops_mcp.runtime_repository import RuntimeRepository
 
 
@@ -33,9 +34,7 @@ async def healthz(request: Request) -> JSONResponse:
         except Exception:
             audit_writable = False
         try:
-            unreconciled_count = (
-                await audit_repo.unreconciled_attempt_count()
-            )
+            unreconciled_count = await audit_repo.unreconciled_attempt_count()
         except Exception:
             unreconciled_count = None
 
@@ -43,9 +42,7 @@ async def healthz(request: Request) -> JSONResponse:
         request.app.state, "runtime_repository", None
     )
     if runtime_repo is None:
-        configuration_ready = getattr(
-            request.app.state, "configuration_ready", True
-        )
+        configuration_ready = getattr(request.app.state, "configuration_ready", True)
     else:
         try:
             configuration_ready = await runtime_repo.is_ready()
@@ -85,9 +82,7 @@ async def healthz(request: Request) -> JSONResponse:
 
 
 async def unavailable_mcp(_request: Request) -> JSONResponse:
-    return JSONResponse(
-        {"error": "MCP runtime is unavailable"}, status_code=503
-    )
+    return JSONResponse({"error": "MCP runtime is unavailable"}, status_code=503)
 
 
 class StructuralAuditMiddleware(BaseHTTPMiddleware):
@@ -99,18 +94,16 @@ class StructuralAuditMiddleware(BaseHTTPMiddleware):
     )
 
     async def dispatch(self, request: Request, call_next):
-        is_security_write = (
-            request.method in {"POST", "PUT", "DELETE", "PATCH"}
-            and request.url.path.startswith(self._SECURITY_WRITE_PREFIXES)
-        )
+        is_security_write = request.method in {
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+        } and request.url.path.startswith(self._SECURITY_WRITE_PREFIXES)
         if is_security_write:
-            audit_repo = getattr(
-                request.app.state, "audit_repository", None
-            )
+            audit_repo = getattr(request.app.state, "audit_repository", None)
             try:
-                is_writable = bool(
-                    audit_repo and await audit_repo.is_writable()
-                )
+                is_writable = bool(audit_repo and await audit_repo.is_writable())
             except Exception:
                 is_writable = False
             if not is_writable:
@@ -128,6 +121,7 @@ def create_app(
     session_secret_persistent: bool = True,
     runtime_repository: RuntimeRepository | None = None,
     mcp_surface: McpSurface | None = None,
+    mcp_surfaces: McpSurfaces | None = None,
     configuration_ready: bool = True,
     mcp_ready: bool | None = None,
     session_https_only: bool = True,
@@ -145,7 +139,21 @@ def create_app(
         *admin_routes,
     ]
     lifespan = None
-    if mcp_surface is None:
+    if mcp_surfaces is not None:
+        for endpoint, surface in mcp_surfaces.by_endpoint.items():
+            routes.append(Mount(f"/{endpoint}/mcp", app=surface.app))
+
+        @asynccontextmanager
+        async def combined_lifespan(_app: Starlette):
+            async with AsyncExitStack() as stack:
+                for surface in mcp_surfaces.by_endpoint.values():
+                    await stack.enter_async_context(
+                        surface.app.router.lifespan_context(surface.app)
+                    )
+                yield
+
+        lifespan = combined_lifespan
+    elif mcp_surface is None:
         routes.extend(
             [
                 Route(
@@ -184,8 +192,14 @@ def create_app(
     app.state.configuration_ready = configuration_ready
     app.state.session_secret_persistent = session_secret_persistent
     app.state.mcp_ready = (
-        mcp_surface is not None or runtime_repository is None
+        mcp_surface is not None
+        or mcp_surfaces is not None
+        or runtime_repository is None
         if mcp_ready is None
         else mcp_ready
     )
+    app.state.target_invalidator = (
+        None if mcp_surfaces is None else mcp_surfaces.invalidator
+    )
+    app.state.mcp_surfaces = mcp_surfaces
     return app

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}VCF Ops MCP Admin{% endblock %}</title>
+  <title>{% block title %}VCF MCP Admin{% endblock %}</title>
   <style>
     :root {
       color-scheme: light;
@@ -56,14 +56,22 @@
     .muted { color: #617087; }
     .error { padding: .75rem; border-radius: 7px; color: #7b151b; background: #ffe7e8; }
     .notice { padding: .75rem; border-radius: 7px; background: #e8f2ff; }
+    .warning { padding: .65rem; border-radius: 7px; color: #6d4300; background: #fff2cd; }
     .badge { display: inline-block; padding: .2rem .45rem; border-radius: 999px; background: #edf2f8; }
+    .badge.good { color: #155b36; background: #dff5e8; }
+    .badge.bad { color: #7b151b; background: #ffe7e8; }
     .inline { display: inline; }
     .inline button { width: auto; margin: 0; padding: .35rem .6rem; }
+    .endpoint-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: .75rem; }
+    details summary { cursor: pointer; }
+    .target-card { margin-bottom: .8rem; }
+    .target-card summary { display: flex; align-items: center; gap: .5rem; }
+    .compact { margin-top: .8rem; }
   </style>
 </head>
 <body>
   <header>
-    <strong>Sentania VCF Ops MCP <span class="muted">(unofficial)</span></strong>
+    <strong>Sentania VCF MCP <span class="muted">(unofficial)</span></strong>
     {% if request.session.get("user_id") %}
     <nav><a href="/admin">Dashboard</a> · <a href="/admin/audit">Audit</a></nav>
     {% endif %}

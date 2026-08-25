@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import sqlite3
+import ssl
 import threading
 import uuid
 from collections.abc import Iterator, Mapping
@@ -27,6 +28,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from vcf_ops_mcp.admin.auth import hash_password, verify_password
 from vcf_ops_mcp.contracts import (
+    BackendKind,
     CapabilityName,
     ConfigurationGeneration,
     KeyId,
@@ -45,11 +47,10 @@ from vcf_ops_mcp.vcf.client import TargetCredentials
 
 DEFAULT_CONFIG_DB_PATH = Path("/data/config.sqlite3")
 DEFAULT_CREDENTIAL_KEYRING_PATH = Path("/keys/credential_keyring.json")
-DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE = Path(
-    "/keys/admin_bootstrap_password"
-)
+DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE = Path("/keys/admin_bootstrap_password")
 PRODUCTION_FQDN = "vcf-lab-operations.int.sentania.net"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+ENVELOPE_SCHEMA_VERSION = 1
 KEYRING_VERSION = 1
 MINIMUM_ADMIN_PASSWORD_BYTES = 16
 _FQDN = re.compile(
@@ -75,11 +76,7 @@ def credential_keyring_path_from_environment(
 ) -> Path:
     values = os.environ if environment is None else environment
     configured = values.get("CREDENTIAL_KEYRING_PATH", "").strip()
-    return (
-        Path(configured)
-        if configured
-        else DEFAULT_CREDENTIAL_KEYRING_PATH
-    )
+    return Path(configured) if configured else DEFAULT_CREDENTIAL_KEYRING_PATH
 
 
 def admin_bootstrap_path_from_environment(
@@ -87,11 +84,7 @@ def admin_bootstrap_path_from_environment(
 ) -> Path:
     values = os.environ if environment is None else environment
     configured = values.get("ADMIN_BOOTSTRAP_PASSWORD_FILE", "").strip()
-    return (
-        Path(configured)
-        if configured
-        else DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE
-    )
+    return Path(configured) if configured else DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE
 
 
 class RuntimeRepository:
@@ -138,9 +131,7 @@ class RuntimeRepository:
                 has_credentials = bool(
                     connection.execute("SELECT 1 FROM targets LIMIT 1").fetchone()
                 )
-                self._load_or_create_keyring(
-                    refuse_generation=has_credentials
-                )
+                self._load_or_create_keyring(refuse_generation=has_credentials)
             except (OSError, sqlite3.Error, SecretStoreUnavailable, ValueError) as exc:
                 self.close()
                 raise RuntimeStoreUnavailable(
@@ -167,9 +158,7 @@ class RuntimeRepository:
     async def initialize_admin_from_bootstrap_file(self) -> bool:
         """Consume the approved bootstrap password file exactly once."""
 
-        return await asyncio.to_thread(
-            self._initialize_admin_from_bootstrap_file_sync
-        )
+        return await asyncio.to_thread(self._initialize_admin_from_bootstrap_file_sync)
 
     async def set_admin_password_for_test(self, password: str) -> None:
         """Initialize the admin hash without a filesystem ceremony in tests."""
@@ -185,6 +174,11 @@ class RuntimeRepository:
     async def list(self) -> tuple[TargetRecord, ...]:
         return await asyncio.to_thread(self._list_sync)
 
+    def list_at_startup(self) -> tuple[TargetRecord, ...]:
+        """Read startup wiring before the ASGI event loop begins."""
+
+        return self._list_sync()
+
     async def create_target(
         self,
         *,
@@ -194,6 +188,8 @@ class RuntimeRepository:
         password: str,
         auth_source: str,
         verify_ssl: bool,
+        backend: BackendKind | str = BackendKind.OPS,
+        root_ca_pem: str | None = None,
     ) -> TargetRecord:
         return await asyncio.to_thread(
             self._create_target_sync,
@@ -203,10 +199,45 @@ class RuntimeRepository:
             password,
             auth_source,
             verify_ssl,
+            backend,
+            root_ca_pem,
         )
 
     async def get_credentials(self, target_id: TargetId) -> TargetCredentials:
         return await asyncio.to_thread(self._get_credentials_sync, target_id)
+
+    async def get_root_ca(self, target_id: TargetId) -> str | None:
+        return await asyncio.to_thread(self._get_root_ca_sync, target_id)
+
+    async def update_target(
+        self,
+        *,
+        target_id: TargetId,
+        expected_generation: ConfigurationGeneration,
+        name: str,
+        fqdn: str,
+        username: str | None,
+        password: str | None,
+        auth_source: str,
+        verify_ssl: bool,
+        posture: TargetPosture,
+        root_ca_pem: str | None = None,
+        clear_root_ca: bool = False,
+    ) -> tuple[TargetRecord, TargetConfigurationChange]:
+        return await asyncio.to_thread(
+            self._update_target_sync,
+            target_id,
+            expected_generation,
+            name,
+            fqdn,
+            username,
+            password,
+            auth_source,
+            verify_ssl,
+            posture,
+            root_ca_pem,
+            clear_root_ca,
+        )
 
     async def save(
         self,
@@ -214,9 +245,7 @@ class RuntimeRepository:
         *,
         expected_generation: ConfigurationGeneration | None,
     ) -> TargetConfigurationChange:
-        return await asyncio.to_thread(
-            self._save_sync, target, expected_generation
-        )
+        return await asyncio.to_thread(self._save_sync, target, expected_generation)
 
     async def create_api_key(
         self,
@@ -224,9 +253,14 @@ class RuntimeRepository:
         label: str,
         scopes: frozenset[CapabilityName],
         allowed_targets: frozenset[TargetId],
+        allowed_endpoints: frozenset[str] | None = None,
     ) -> str:
         return await asyncio.to_thread(
-            self._create_api_key_sync, label, scopes, allowed_targets
+            self._create_api_key_sync,
+            label,
+            scopes,
+            allowed_targets,
+            allowed_endpoints,
         )
 
     async def revoke_api_key(self, key_id: KeyId) -> bool:
@@ -265,7 +299,10 @@ class RuntimeRepository:
                 auth_source TEXT NOT NULL,
                 configuration_generation INTEGER NOT NULL,
                 username_envelope TEXT NOT NULL,
-                password_envelope TEXT NOT NULL
+                password_envelope TEXT NOT NULL,
+                backend TEXT NOT NULL DEFAULT 'ops'
+                    CHECK (backend IN ('ops', 'vcenter')),
+                root_ca_envelope TEXT
             );
             CREATE TABLE IF NOT EXISTS api_keys (
                 key_id TEXT PRIMARY KEY,
@@ -273,20 +310,39 @@ class RuntimeRepository:
                 label TEXT NOT NULL,
                 scopes_json TEXT NOT NULL,
                 allowed_targets_json TEXT NOT NULL,
+                allowed_endpoints_json TEXT NOT NULL DEFAULT '["ops","vcf"]',
                 revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1)),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 revoked_at TEXT
             );
             """
         )
-        row = connection.execute(
-            "SELECT version FROM schema_version"
-        ).fetchone()
+        row = connection.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
             connection.execute(
                 "INSERT INTO schema_version(version) VALUES (?)",
                 (SCHEMA_VERSION,),
             )
+        elif row[0] == 1:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    "ALTER TABLE targets ADD COLUMN backend TEXT NOT NULL"
+                    " DEFAULT 'ops' CHECK (backend IN ('ops', 'vcenter'))"
+                )
+                connection.execute(
+                    "ALTER TABLE targets ADD COLUMN root_ca_envelope TEXT"
+                )
+                connection.execute(
+                    "ALTER TABLE api_keys ADD COLUMN allowed_endpoints_json TEXT"
+                    ' NOT NULL DEFAULT \'["ops","vcf"]\''
+                )
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
+                )
+            except BaseException:
+                connection.rollback()
+                raise
         elif row[0] != SCHEMA_VERSION:
             raise RuntimeStoreUnavailable(
                 f"unsupported runtime schema version {row[0]}"
@@ -304,9 +360,9 @@ class RuntimeRepository:
                 "version": KEYRING_VERSION,
                 "active_key_id": key_id,
                 "keys": {
-                    key_id: base64.urlsafe_b64encode(
-                        secrets.token_bytes(32)
-                    ).decode("ascii")
+                    key_id: base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(
+                        "ascii"
+                    )
                 },
             }
             atomic_private_text_write(
@@ -371,9 +427,11 @@ class RuntimeRepository:
 
     def _has_admin_sync(self) -> bool:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT 1 FROM settings WHERE name = 'admin_password_hash'"
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute("SELECT 1 FROM settings WHERE name = 'admin_password_hash'")
+                .fetchone()
+            )
             return row is not None
 
     def _initialize_admin_from_bootstrap_file_sync(self) -> bool:
@@ -407,32 +465,38 @@ class RuntimeRepository:
             if existing is not None:
                 raise RuntimeStoreUnavailable("admin password is already initialized")
             connection.execute(
-                "INSERT INTO settings(name, value) VALUES"
-                " ('admin_password_hash', ?)",
+                "INSERT INTO settings(name, value) VALUES ('admin_password_hash', ?)",
                 (hash_password(password),),
             )
             connection.commit()
 
     def _verify_admin_password_sync(self, password: str) -> bool:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT value FROM settings"
-                " WHERE name = 'admin_password_hash'"
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings WHERE name = 'admin_password_hash'"
+                )
+                .fetchone()
+            )
             return bool(row and verify_password(password, row[0]))
 
     def _get_sync(self, target_id: TargetId) -> TargetRecord | None:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT * FROM targets WHERE id = ?", (str(target_id),)
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute("SELECT * FROM targets WHERE id = ?", (str(target_id),))
+                .fetchone()
+            )
             return None if row is None else self._target_from_row(row)
 
     def _list_sync(self) -> tuple[TargetRecord, ...]:
         with self._lock:
-            rows = self._connection_or_raise().execute(
-                "SELECT * FROM targets ORDER BY name, id"
-            ).fetchall()
+            rows = (
+                self._connection_or_raise()
+                .execute("SELECT * FROM targets ORDER BY name, id")
+                .fetchall()
+            )
             return tuple(self._target_from_row(row) for row in rows)
 
     def _create_target_sync(
@@ -443,11 +507,17 @@ class RuntimeRepository:
         password: str,
         auth_source: str,
         verify_ssl: bool,
+        backend: BackendKind | str,
+        root_ca_pem: str | None,
     ) -> TargetRecord:
         normalized_fqdn = _normalize_fqdn(fqdn)
         if not name.strip() or not username or not password:
             raise ValueError("name, username, and password are required")
         normalized_source = auth_source.strip().upper() or "LOCAL"
+        backend_kind = BackendKind(backend)
+        normalized_ca = _normalize_root_ca(root_ca_pem)
+        if verify_ssl and root_ca_pem is not None and normalized_ca is None:
+            raise ValueError("the uploaded root CA bundle is empty")
         target_id = TargetId(str(uuid.uuid4()))
         is_prod = normalized_fqdn == PRODUCTION_FQDN
         target = TargetRecord(
@@ -459,12 +529,15 @@ class RuntimeRepository:
             verify_ssl=verify_ssl,
             auth_source=normalized_source,
             configuration_generation=ConfigurationGeneration(1),
+            backend=backend_kind,
+            has_custom_ca=normalized_ca is not None,
         )
-        username_envelope = self._encrypt(
-            target_id, "username", username
-        )
-        password_envelope = self._encrypt(
-            target_id, "password", password
+        username_envelope = self._encrypt(target_id, "username", username)
+        password_envelope = self._encrypt(target_id, "password", password)
+        root_ca_envelope = (
+            self._encrypt(target_id, "root_ca", normalized_ca)
+            if normalized_ca is not None
+            else None
         )
         with self._write_transaction() as connection:
             try:
@@ -473,8 +546,9 @@ class RuntimeRepository:
                     INSERT INTO targets(
                         id, name, fqdn, posture, is_prod, verify_ssl,
                         auth_source, configuration_generation,
-                        username_envelope, password_envelope
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        username_envelope, password_envelope, backend,
+                        root_ca_envelope
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(target.id),
@@ -487,6 +561,8 @@ class RuntimeRepository:
                         int(target.configuration_generation),
                         username_envelope,
                         password_envelope,
+                        target.backend.value,
+                        root_ca_envelope,
                     ),
                 )
                 connection.commit()
@@ -496,20 +572,119 @@ class RuntimeRepository:
 
     def _get_credentials_sync(self, target_id: TargetId) -> TargetCredentials:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT auth_source, username_envelope, password_envelope"
-                " FROM targets WHERE id = ?",
-                (str(target_id),),
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT auth_source, username_envelope, password_envelope"
+                    " FROM targets WHERE id = ?",
+                    (str(target_id),),
+                )
+                .fetchone()
+            )
+            if row is None:
+                raise KeyError(f"unknown target: {target_id}")
+            username = self._decrypt(target_id, "username", row["username_envelope"])
+            password = self._decrypt(target_id, "password", row["password_envelope"])
+            return TargetCredentials(username, password, row["auth_source"])
+
+    def _get_root_ca_sync(self, target_id: TargetId) -> str | None:
+        with self._lock:
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT root_ca_envelope FROM targets WHERE id = ?",
+                    (str(target_id),),
+                )
+                .fetchone()
+            )
+            if row is None:
+                raise KeyError(f"unknown target: {target_id}")
+            envelope = row["root_ca_envelope"]
+            if envelope is None:
+                return None
+            return self._decrypt(target_id, "root_ca", envelope)
+
+    def _update_target_sync(
+        self,
+        target_id: TargetId,
+        expected_generation: ConfigurationGeneration,
+        name: str,
+        fqdn: str,
+        username: str | None,
+        password: str | None,
+        auth_source: str,
+        verify_ssl: bool,
+        posture: TargetPosture,
+        root_ca_pem: str | None,
+        clear_root_ca: bool,
+    ) -> tuple[TargetRecord, TargetConfigurationChange]:
+        normalized_fqdn = _normalize_fqdn(fqdn)
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("target name is required")
+        if posture is TargetPosture.ACTIONS_ENABLED:
+            raise ValueError(
+                "unsigned prototype packs cannot arm an actions-enabled target"
+            )
+        normalized_source = auth_source.strip().upper() or "LOCAL"
+        normalized_ca = _normalize_root_ca(root_ca_pem)
+        if root_ca_pem is not None and normalized_ca is None:
+            raise ValueError("the uploaded root CA bundle is empty")
+
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM targets WHERE id = ?", (str(target_id),)
             ).fetchone()
             if row is None:
                 raise KeyError(f"unknown target: {target_id}")
-            username = self._decrypt(
-                target_id, "username", row["username_envelope"]
+            previous = ConfigurationGeneration(row["configuration_generation"])
+            if previous != expected_generation:
+                raise RuntimeStoreUnavailable("target configuration generation changed")
+            current = ConfigurationGeneration(int(previous) + 1)
+            username_envelope = row["username_envelope"]
+            password_envelope = row["password_envelope"]
+            root_ca_envelope = row["root_ca_envelope"]
+            if username:
+                username_envelope = self._encrypt(target_id, "username", username)
+            if password:
+                password_envelope = self._encrypt(target_id, "password", password)
+            if clear_root_ca:
+                root_ca_envelope = None
+            elif normalized_ca is not None:
+                root_ca_envelope = self._encrypt(target_id, "root_ca", normalized_ca)
+            is_prod = normalized_fqdn == PRODUCTION_FQDN
+            try:
+                connection.execute(
+                    """
+                    UPDATE targets SET name = ?, fqdn = ?, posture = ?,
+                        is_prod = ?, verify_ssl = ?, auth_source = ?,
+                        configuration_generation = ?, username_envelope = ?,
+                        password_envelope = ?, root_ca_envelope = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        normalized_name,
+                        normalized_fqdn,
+                        TargetPosture.READ_ONLY.value,
+                        int(is_prod),
+                        int(verify_ssl),
+                        normalized_source,
+                        int(current),
+                        username_envelope,
+                        password_envelope,
+                        root_ca_envelope,
+                        str(target_id),
+                    ),
+                )
+                connection.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("a target with this FQDN already exists") from exc
+            stored = self._target_from_row(
+                connection.execute(
+                    "SELECT * FROM targets WHERE id = ?", (str(target_id),)
+                ).fetchone()
             )
-            password = self._decrypt(
-                target_id, "password", row["password_envelope"]
-            )
-            return TargetCredentials(username, password, row["auth_source"])
+            return stored, TargetConfigurationChange(target_id, previous, current)
 
     def _save_sync(
         self,
@@ -517,7 +692,9 @@ class RuntimeRepository:
         expected_generation: ConfigurationGeneration | None,
     ) -> TargetConfigurationChange:
         if target.posture is not TargetPosture.READ_ONLY:
-            raise ValueError("actions are not implemented in this MVP")
+            raise ValueError(
+                "unsigned prototype packs cannot arm an actions-enabled target"
+            )
         normalized_fqdn = _normalize_fqdn(target.fqdn)
         if target.is_prod != (normalized_fqdn == PRODUCTION_FQDN):
             raise ValueError("production identity is derived from its FQDN")
@@ -530,9 +707,7 @@ class RuntimeRepository:
                 raise KeyError(f"unknown target: {target.id}")
             previous = ConfigurationGeneration(row[0])
             if expected_generation is not None and previous != expected_generation:
-                raise RuntimeStoreUnavailable(
-                    "target configuration generation changed"
-                )
+                raise RuntimeStoreUnavailable("target configuration generation changed")
             current = ConfigurationGeneration(int(previous) + 1)
             connection.execute(
                 """
@@ -560,23 +735,35 @@ class RuntimeRepository:
         label: str,
         scopes: frozenset[CapabilityName],
         allowed_targets: frozenset[TargetId],
+        allowed_endpoints: frozenset[str] | None,
     ) -> str:
         if not label.strip():
             raise ValueError("API key label is required")
         if not scopes or not scopes.issubset(self._grantable_scopes):
             raise ValueError("API key scopes must be implemented capabilities")
+        if not allowed_targets:
+            raise ValueError("at least one target must be allowed")
         with self._write_transaction() as connection:
-            if not allowed_targets:
-                raise ValueError("at least one target must be allowed")
             placeholders = ",".join("?" for _ in allowed_targets)
             found = connection.execute(
                 f"SELECT id FROM targets WHERE id IN ({placeholders})",
                 tuple(str(value) for value in allowed_targets),
             ).fetchall()
-            if {row[0] for row in found} != {
-                str(value) for value in allowed_targets
-            }:
+            if {row[0] for row in found} != {str(value) for value in allowed_targets}:
                 raise ValueError("API key names an unknown target")
+            backend_rows = connection.execute(
+                f"SELECT backend FROM targets WHERE id IN ({placeholders})",
+                tuple(str(value) for value in allowed_targets),
+            ).fetchall()
+            target_endpoints = frozenset(row[0] for row in backend_rows)
+            endpoints = allowed_endpoints or (target_endpoints | {"vcf"})
+            known_endpoints = frozenset({*(kind.value for kind in BackendKind), "vcf"})
+            if not endpoints or not endpoints.issubset(known_endpoints):
+                raise ValueError("API key endpoints must be registered backends")
+            if not target_endpoints.issubset(endpoints):
+                raise ValueError(
+                    "every allowed target must belong to an allowed endpoint"
+                )
             key_id = KeyId(secrets.token_hex(8))
             presented = f"vok_{key_id}_{secrets.token_urlsafe(32)}"
             digest = hashlib.sha256(presented.encode("utf-8")).digest()
@@ -584,7 +771,8 @@ class RuntimeRepository:
                 """
                 INSERT INTO api_keys(
                     key_id, digest, label, scopes_json, allowed_targets_json
-                ) VALUES (?, ?, ?, ?, ?)
+                    , allowed_endpoints_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(key_id),
@@ -592,6 +780,7 @@ class RuntimeRepository:
                     label.strip(),
                     json.dumps(sorted(str(value) for value in scopes)),
                     json.dumps(sorted(str(value) for value in allowed_targets)),
+                    json.dumps(sorted(endpoints)),
                 ),
             )
             connection.commit()
@@ -610,19 +799,22 @@ class RuntimeRepository:
 
     def _list_api_keys_sync(self) -> tuple[dict[str, object], ...]:
         with self._lock:
-            rows = self._connection_or_raise().execute(
-                "SELECT key_id, label, scopes_json, allowed_targets_json,"
-                " revoked, created_at, revoked_at"
-                " FROM api_keys ORDER BY created_at DESC, key_id"
-            ).fetchall()
+            rows = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT key_id, label, scopes_json, allowed_targets_json,"
+                    " allowed_endpoints_json, revoked, created_at, revoked_at"
+                    " FROM api_keys ORDER BY created_at DESC, key_id"
+                )
+                .fetchall()
+            )
             return tuple(
                 {
                     "key_id": row["key_id"],
                     "label": row["label"],
                     "scopes": json.loads(row["scopes_json"]),
-                    "allowed_targets": json.loads(
-                        row["allowed_targets_json"]
-                    ),
+                    "allowed_targets": json.loads(row["allowed_targets_json"]),
+                    "allowed_endpoints": json.loads(row["allowed_endpoints_json"]),
                     "revoked": bool(row["revoked"]),
                     "created_at": row["created_at"],
                     "revoked_at": row["revoked_at"],
@@ -639,23 +831,28 @@ class RuntimeRepository:
         key_id = KeyId(parts[1])
         candidate = hashlib.sha256(presented_key.encode("utf-8")).digest()
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT digest, scopes_json, allowed_targets_json, revoked"
-                " FROM api_keys WHERE key_id = ?",
-                (str(key_id),),
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT digest, scopes_json, allowed_targets_json,"
+                    " allowed_endpoints_json, revoked"
+                    " FROM api_keys WHERE key_id = ?",
+                    (str(key_id),),
+                )
+                .fetchone()
+            )
             if row is None or not secrets.compare_digest(candidate, row["digest"]):
                 return None
             scopes = frozenset(json.loads(row["scopes_json"]))
             targets = frozenset(
-                TargetId(value)
-                for value in json.loads(row["allowed_targets_json"])
+                TargetId(value) for value in json.loads(row["allowed_targets_json"])
             )
             return RequestIdentity(
                 key_id=key_id,
                 granted_scopes=scopes,
                 allowed_targets=targets,
                 revoked=bool(row["revoked"]),
+                allowed_endpoints=frozenset(json.loads(row["allowed_endpoints_json"])),
             )
 
     def _target_from_row(self, row: sqlite3.Row) -> TargetRecord:
@@ -670,6 +867,8 @@ class RuntimeRepository:
             configuration_generation=ConfigurationGeneration(
                 row["configuration_generation"]
             ),
+            backend=BackendKind(row["backend"]),
+            has_custom_ca=row["root_ca_envelope"] is not None,
         )
 
     def _encrypt(self, target_id: TargetId, purpose: str, value: str) -> str:
@@ -685,9 +884,7 @@ class RuntimeRepository:
                 "version": 1,
                 "key_id": self._active_key_id,
                 "nonce": base64.urlsafe_b64encode(nonce).decode("ascii"),
-                "ciphertext": base64.urlsafe_b64encode(ciphertext).decode(
-                    "ascii"
-                ),
+                "ciphertext": base64.urlsafe_b64encode(ciphertext).decode("ascii"),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -715,7 +912,7 @@ class RuntimeRepository:
     @staticmethod
     def _aad(target_id: TargetId, purpose: str, key_id: str) -> bytes:
         return (
-            f"schema={SCHEMA_VERSION}|target={target_id}|"
+            f"schema={ENVELOPE_SCHEMA_VERSION}|target={target_id}|"
             f"purpose={purpose}|key={key_id}"
         ).encode("utf-8")
 
@@ -725,3 +922,19 @@ def _normalize_fqdn(value: str) -> str:
     if not _FQDN.fullmatch(normalized):
         raise ValueError("FQDN must be a hostname without a scheme or path")
     return normalized
+
+
+def _normalize_root_ca(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized.encode("utf-8")) > 256 * 1024:
+        raise ValueError("root CA bundle exceeds the 256 KiB limit")
+    try:
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=normalized)
+    except ssl.SSLError as exc:
+        raise ValueError("root CA bundle is not valid PEM certificate data") from exc
+    return normalized + "\n"

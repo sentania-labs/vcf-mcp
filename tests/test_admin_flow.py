@@ -2,16 +2,47 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from starlette.testclient import TestClient
 
 from vcf_ops_mcp.app import create_app
 from vcf_ops_mcp.audit import SqliteAuditRepository
+from vcf_ops_mcp.contracts import BackendKind, InvalidationMode
 from vcf_ops_mcp.mcp_server import implemented_scopes
 from vcf_ops_mcp.runtime_repository import RuntimeRepository
+
+
+def synthetic_ca_pem() -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "fixture root")])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+class RecordingInvalidator:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def invalidate(self, change, *, mode):
+        self.calls.append((change, mode))
 
 
 def test_bootstrap_login_target_registration_and_key_mint(
@@ -56,9 +87,7 @@ def test_bootstrap_login_target_registration_and_key_mint(
 
             dashboard = client.get("/admin")
             assert dashboard.status_code == 200
-            csrf = re.search(
-                r'name="csrf_token" value="([^"]+)"', dashboard.text
-            )
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
             assert csrf is not None
 
             refused = client.post(
@@ -83,12 +112,8 @@ def test_bootstrap_login_target_registration_and_key_mint(
             assert registered.status_code == 303
 
             dashboard = client.get("/admin")
-            csrf = re.search(
-                r'name="csrf_token" value="([^"]+)"', dashboard.text
-            )
-            target_id = re.search(
-                r'name="target_id" value="([^"]+)"', dashboard.text
-            )
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
+            target_id = re.search(r'name="target_id" value="([^"]+)"', dashboard.text)
             assert csrf is not None and target_id is not None
             created = client.post(
                 "/admin/keys",
@@ -142,9 +167,7 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
                 follow_redirects=False,
             )
             dashboard = client.get("/admin")
-            csrf = re.search(
-                r'name="csrf_token" value="([^"]+)"', dashboard.text
-            )
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
             assert csrf is not None
 
             with mock.patch(
@@ -198,6 +221,88 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
         audit.close()
 
 
+def test_target_edit_rotates_credentials_uploads_ca_and_cancels_tls_work(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    target = asyncio.run(
+        runtime.create_target(
+            name="old-vcenter",
+            fqdn="old-vcenter.example.internal",
+            username="synthetic-old-user",
+            password="synthetic-old-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+            backend=BackendKind.VCENTER,
+        )
+    )
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+    invalidator = RecordingInvalidator()
+    app.state.target_invalidator = invalidator
+    ca_pem = synthetic_ca_pem()
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            login = client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-admin-password",
+                },
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            dashboard = client.get("/admin")
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
+            assert csrf is not None
+            edited = client.post(
+                f"/admin/targets/{target.id}",
+                data={
+                    "csrf_token": csrf.group(1),
+                    "configuration_generation": "1",
+                    "name": "new-vcenter",
+                    "fqdn": "new-vcenter.example.internal",
+                    "username": "synthetic-new-user",
+                    "password": "synthetic-new-password",
+                    "auth_source": "LOCAL",
+                    "posture": "read_only",
+                    "verify_ssl": "on",
+                },
+                files={"root_ca": ("fixture-ca.pem", ca_pem, "application/x-pem-file")},
+                follow_redirects=False,
+            )
+            assert edited.status_code == 303
+
+        updated = asyncio.run(runtime.get(target.id))
+        credentials = asyncio.run(runtime.get_credentials(target.id))
+        assert updated is not None
+        assert updated.name == "new-vcenter"
+        assert updated.fqdn == "new-vcenter.example.internal"
+        assert updated.verify_ssl is True
+        assert updated.has_custom_ca is True
+        assert credentials.acquire_payload()["username"] == "synthetic-new-user"
+        assert credentials.acquire_payload()["password"] == "synthetic-new-password"
+        assert asyncio.run(runtime.get_root_ca(target.id)) == ca_pem
+        assert len(invalidator.calls) == 1
+        assert invalidator.calls[0][1] is InvalidationMode.CANCEL
+    finally:
+        runtime.close()
+        audit.close()
+
+
 def test_login_with_non_ascii_username_is_denied(tmp_path: Path) -> None:
     bootstrap = tmp_path / "keys" / "admin_bootstrap_password"
     bootstrap.parent.mkdir(parents=True)
@@ -244,11 +349,7 @@ def test_login_retries_leftover_bootstrap_cleanup(tmp_path: Path) -> None:
         bootstrap_password_path=bootstrap,
     )
     runtime.bootstrap()
-    asyncio.run(
-        runtime.set_admin_password_for_test(
-            "synthetic-bootstrap-password"
-        )
-    )
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-bootstrap-password"))
     bootstrap.parent.mkdir(parents=True, exist_ok=True)
     bootstrap.write_text("synthetic-bootstrap-password")
     bootstrap.chmod(0o600)

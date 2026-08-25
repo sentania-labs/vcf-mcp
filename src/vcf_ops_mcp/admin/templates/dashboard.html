@@ -2,8 +2,8 @@
 {% block content %}
 <div style="display:flex; justify-content:space-between; gap:1rem; align-items:center">
   <div>
-    <h1>Read-only MVP</h1>
-    <p class="muted">Register targets, mint scoped MCP keys, and inspect audit records. Actions are not implemented.</p>
+    <h1>Multi-backend prototype</h1>
+    <p class="muted">Register Operations and vCenter backends, edit their trust and credentials, then mint endpoint-scoped keys. Actions are not implemented.</p>
   </div>
   <form method="post" action="/admin/logout">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -12,38 +12,63 @@
 </div>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-<div class="grid">
+<section class="card notice">
+  <h2>Startup-frozen endpoints</h2>
+  <p>Backend tools are derived from registrations at process start. After adding the first target for a product, restart the container to activate its endpoint. Removing runtime loading keeps the dispatcher boundary fixed.</p>
+  <div class="endpoint-grid">
+    <div><code>/vcf/mcp</code><br><span class="badge good">management</span></div>
+    <div><code>/ops/mcp</code><br><span class="badge {{ 'good' if 'ops' in wired_endpoints else '' }}">{{ 'wired' if 'ops' in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', 'ops')|list else 'not registered' }}</span></div>
+    <div><code>/vcenter/mcp</code><br><span class="badge {{ 'good' if 'vcenter' in wired_endpoints else '' }}">{{ 'wired' if 'vcenter' in wired_endpoints else 'restart required' if targets|selectattr('backend.value', 'equalto', 'vcenter')|list else 'not registered' }}</span></div>
+  </div>
+</section>
+
+<div class="grid" style="margin-top:1rem">
   <section class="card">
-    <h2>Register target</h2>
-    <p class="muted">New targets are structurally read-only. The production FQDN is additionally hard-blocked.</p>
-    <form method="post" action="/admin/targets">
+    <h2>Register backend target</h2>
+    <p class="muted">TLS verification starts disabled and is labelled that way. Upload a trusted root CA before enabling verification.</p>
+    <form method="post" action="/admin/targets" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="backend">Product</label>
+      <select id="backend" name="backend">
+        {% for backend in backend_kinds %}
+        <option value="{{ backend.value }}">{{ 'VCF Operations' if backend.value == 'ops' else 'vCenter Server' }}</option>
+        {% endfor %}
+      </select>
       <label for="name">Display name</label>
       <input id="name" name="name" required>
-      <label for="fqdn">VCF Ops FQDN</label>
-      <input id="fqdn" name="fqdn" placeholder="vcf-ops.example.internal" required>
+      <label for="fqdn">Appliance endpoint (FQDN)</label>
+      <input id="fqdn" name="fqdn" placeholder="appliance.example.internal" required>
       <label for="username">Service-account username</label>
       <input id="username" name="username" autocomplete="off" required>
       <label for="password">Service-account password</label>
       <input id="password" name="password" type="password" autocomplete="new-password" required>
-      <label for="auth_source">Authentication source</label>
+      <label for="auth_source">Operations authentication source</label>
       <select id="auth_source" name="auth_source">
         <option value="LOCAL">Local users (LOCAL)</option>
       </select>
-      <label><input type="checkbox" name="verify_ssl" checked> Verify TLS certificate</label>
+      <label for="root_ca">Root CA bundle (PEM)</label>
+      <input id="root_ca" name="root_ca" type="file" accept=".pem,.crt,text/plain,application/x-pem-file">
+      <label><input type="checkbox" name="verify_ssl"> Enable TLS certificate verification</label>
+      <p class="warning">Default: certificate verification disabled. Credentials can be intercepted on an untrusted network until this is enabled.</p>
       <button type="submit">Register read-only target</button>
     </form>
   </section>
 
   <section class="card">
     <h2>Mint MCP API key</h2>
-    <p class="muted">Choose explicit scopes from capabilities implemented by this build and select the allowed targets.</p>
+    <p class="muted">Choose endpoint access first, then explicit tool scopes and matching targets.</p>
     <form method="post" action="/admin/keys">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="label">Key label</label>
       <input id="label" name="label" required>
       <fieldset>
-        <legend>Granted scopes</legend>
+        <legend>Allowed endpoints</legend>
+        {% for endpoint in endpoint_names %}
+        <label><input type="checkbox" name="endpoint" value="{{ endpoint }}"> /{{ endpoint }}/mcp</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>Granted tool scopes</legend>
         {% for scope in grantable_scopes %}
         <label><input type="checkbox" name="scope" value="{{ scope }}"> {{ scope }}</label>
         {% endfor %}
@@ -51,47 +76,90 @@
       <fieldset>
         <legend>Allowed targets</legend>
         {% for target in targets %}
-        <label><input type="checkbox" name="target_id" value="{{ target.id }}"> {{ target.name }} ({{ target.fqdn }})</label>
+        <label><input type="checkbox" name="target_id" value="{{ target.id }}"> {{ target.name }} ({{ target.backend.value }})</label>
         {% else %}
         <p class="muted">Register a target first.</p>
         {% endfor %}
       </fieldset>
-      <button type="submit">Mint read-only key</button>
+      <button type="submit">Mint local scoped key</button>
     </form>
   </section>
 </div>
 
-<section class="card" style="margin-top:1rem">
+<section style="margin-top:1rem">
   <h2>Targets</h2>
-  <table>
-    <thead><tr><th>Name</th><th>ID</th><th>FQDN</th><th>Posture</th><th>TLS</th></tr></thead>
-    <tbody>
-    {% for target in targets %}
-      <tr>
-        <td>{{ target.name }}</td>
-        <td><code>{{ target.id }}</code></td>
-        <td>{{ target.fqdn }}{% if target.is_prod %} <span class="badge">production</span>{% endif %}</td>
-        <td>{{ target.posture.value }}</td>
-        <td>{{ "verify" if target.verify_ssl else "verification disabled" }}</td>
-      </tr>
-    {% else %}
-      <tr><td colspan="5" class="muted">No targets registered.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  {% for target in targets %}
+  <details class="card target-card" {% if loop.first %}open{% endif %}>
+    <summary>
+      <strong>{{ target.name }}</strong>
+      <span class="badge">{{ target.backend.value }}</span>
+      <span class="badge {{ 'good' if target.verify_ssl else 'bad' }}">{{ 'TLS verified' if target.verify_ssl else 'TLS verification disabled' }}</span>
+    </summary>
+    <form method="post" action="/admin/targets/{{ target.id }}" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="configuration_generation" value="{{ target.configuration_generation }}">
+      <div class="grid compact">
+        <div>
+          <label>Product</label>
+          <input value="{{ 'VCF Operations' if target.backend.value == 'ops' else 'vCenter Server' }}" disabled>
+        </div>
+        <div>
+          <label for="name-{{ target.id }}">Display name</label>
+          <input id="name-{{ target.id }}" name="name" value="{{ target.name }}" required>
+        </div>
+        <div>
+          <label for="fqdn-{{ target.id }}">Appliance endpoint (FQDN)</label>
+          <input id="fqdn-{{ target.id }}" name="fqdn" value="{{ target.fqdn }}" required>
+        </div>
+        <div>
+          <label for="posture-{{ target.id }}">Posture</label>
+          <select id="posture-{{ target.id }}" name="posture">
+            <option value="read_only" selected>Read only</option>
+            <option value="actions_enabled">Actions enabled (refused by unsigned prototype packs)</option>
+          </select>
+        </div>
+        <div>
+          <label for="username-{{ target.id }}">New username (optional)</label>
+          <input id="username-{{ target.id }}" name="username" autocomplete="off">
+        </div>
+        <div>
+          <label for="password-{{ target.id }}">New password (optional)</label>
+          <input id="password-{{ target.id }}" name="password" type="password" autocomplete="new-password">
+        </div>
+        <div>
+          <label for="auth-{{ target.id }}">Operations authentication source</label>
+          <select id="auth-{{ target.id }}" name="auth_source">
+            <option value="LOCAL" selected>Local users (LOCAL)</option>
+          </select>
+        </div>
+        <div>
+          <label for="ca-{{ target.id }}">Replace root CA bundle (PEM)</label>
+          <input id="ca-{{ target.id }}" name="root_ca" type="file" accept=".pem,.crt,text/plain,application/x-pem-file">
+          <label><input type="checkbox" name="clear_root_ca"> Remove stored root CA{% if target.has_custom_ca %} (currently present){% endif %}</label>
+        </div>
+      </div>
+      <label><input type="checkbox" name="verify_ssl" {% if target.verify_ssl %}checked{% endif %}> Enable TLS certificate verification for this backend</label>
+      <p class="muted">Enabling verification or replacing trust material cancels in-flight requests immediately. Other edits drain and discard superseded results.</p>
+      {% if target.is_prod %}<p class="warning">Production identity is derived from this FQDN and remains read-only.</p>{% endif %}
+      <button type="submit">Save target changes</button>
+    </form>
+  </details>
+  {% else %}
+  <div class="card muted">No targets registered.</div>
+  {% endfor %}
 </section>
 
 <section class="card" style="margin-top:1rem">
   <h2>API keys</h2>
   <table>
-    <thead><tr><th>Label</th><th>ID</th><th>Scopes</th><th>Targets</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Label</th><th>ID</th><th>Endpoints</th><th>Scopes</th><th>Status</th><th></th></tr></thead>
     <tbody>
     {% for api_key in api_keys %}
       <tr>
         <td>{{ api_key.label }}</td>
         <td><code>{{ api_key.key_id }}</code></td>
+        <td>{{ api_key.allowed_endpoints|join(", ") }}</td>
         <td>{{ api_key.scopes|join(", ") }}</td>
-        <td><code>{{ api_key.allowed_targets|join(", ") }}</code></td>
         <td>{{ "revoked" if api_key.revoked else "active" }}</td>
         <td>
           {% if not api_key.revoked %}
