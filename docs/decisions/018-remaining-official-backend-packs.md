@@ -75,6 +75,16 @@ product packs now declare exactly 19 distinct tools. The vCenter list and get
 operations remain separate contracts, each with its own frozen HTTP method,
 path, query allowlist, and response projection.
 
+## Review finding direction
+
+Firstmate, not the captain, directed the implementation response to the four
+external review findings. The captain had not seen or decided these findings.
+Firstmate required the declared-backend client to strip upstream content
+encoding and length headers when rebuilding an already decoded response,
+restoration of the appliance field casing in both vCenter projections and
+fixtures, restoration of the published `standalone` host filter with the
+uncited UUID fields removed, and correction of the NSX segment placeholder.
+
 ## Protected paths touched
 
 `src/vcf_ops_mcp/`
