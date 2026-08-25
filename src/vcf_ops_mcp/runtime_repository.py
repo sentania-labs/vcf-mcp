@@ -734,9 +734,9 @@ class RuntimeRepository:
             raise ValueError("API key label is required")
         if not scopes or not scopes.issubset(self._grantable_scopes):
             raise ValueError("API key scopes must be implemented capabilities")
+        if not allowed_targets:
+            raise ValueError("at least one target must be allowed")
         with self._write_transaction() as connection:
-            if not allowed_targets:
-                raise ValueError("at least one target must be allowed")
             placeholders = ",".join("?" for _ in allowed_targets)
             found = connection.execute(
                 f"SELECT id FROM targets WHERE id IN ({placeholders})",

@@ -164,8 +164,8 @@ class BackendClientPool:
             client = self._clients.get(change.target_id)
             if client is None:
                 return InvalidationResult(change, mode, 0, 0)
-            if client.configuration_generation != change.previous_generation:
-                raise RuntimeError("live client generation does not match edit")
+            if client.configuration_generation >= change.current_generation:
+                return InvalidationResult(change, mode, 0, 0)
             inflight = client.mark_closed()
         if mode is InvalidationMode.CANCEL:
             cancelled = await client.cancel()
@@ -175,7 +175,8 @@ class BackendClientPool:
             drained = inflight
             cancelled = 0
         async with self._lock:
-            self._clients.pop(change.target_id, None)
+            if self._clients.get(change.target_id) is client:
+                self._clients.pop(change.target_id, None)
         await client.aclose()
         return InvalidationResult(change, mode, drained, cancelled)
 
