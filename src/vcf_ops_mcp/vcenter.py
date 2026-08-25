@@ -304,9 +304,12 @@ async def list_vcenter_vms(
             "resource_pools": resource_pools,
         },
     )
-    items = raw if isinstance(raw, list) else []
-    client.enforce_list_cap(len(items))
-    return {"items": [_project_vm_summary(item) for item in items], "count": len(items)}
+    if not isinstance(raw, list):
+        raise UpstreamProtocolError(
+            "vCenter VM list was not a list", target_id=client.target_id
+        )
+    client.enforce_list_cap(len(raw))
+    return {"items": [_project_vm_summary(item) for item in raw], "count": len(raw)}
 
 
 async def get_vcenter_vm(client: VcenterTargetClient, *, vm: str) -> dict[str, object]:
@@ -340,12 +343,15 @@ async def list_vcenter_hosts(
             "standalone": standalone,
         },
     )
-    items = raw if isinstance(raw, list) else []
-    client.enforce_list_cap(len(items))
+    if not isinstance(raw, list):
+        raise UpstreamProtocolError(
+            "vCenter host list was not a list", target_id=client.target_id
+        )
+    client.enforce_list_cap(len(raw))
     allowed = ("host", "name", "connection_state", "power_state")
     projected = [
         {key: item[key] for key in allowed if key in item}
-        for item in items
+        for item in raw
         if isinstance(item, dict)
     ]
     return {"items": projected, "count": len(projected)}

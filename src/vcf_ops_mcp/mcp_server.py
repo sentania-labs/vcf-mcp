@@ -106,6 +106,7 @@ class BackendClientPool:
             client_factory is not None and _accepts_root_ca(client_factory)
         )
         self._clients: dict[TargetId, object] = {}
+        self._trust: dict[TargetId, tuple[bool, str | None]] = {}
         self._lock = asyncio.Lock()
 
     async def get(self, target: TargetRecord) -> object:
@@ -119,14 +120,44 @@ class BackendClientPool:
                 and not existing.is_closed
             ):
                 return existing
+            stale = None
+            stale_trust = self._trust.get(target.id)
             if existing is not None:
+                self._clients.pop(target.id, None)
                 existing.mark_closed()
-                await existing.aclose()
+                stale = existing
             credentials = await self._repository.get_credentials(target.id)
             root_ca = await self._repository.get_root_ca(target.id)
             client = self._build_client(target, credentials, root_ca)
             self._clients[target.id] = client
-            return client
+            self._trust[target.id] = (target.verify_ssl, root_ca)
+        if stale is not None:
+            await self._settle_stale(stale, target, stale_trust, root_ca)
+        return client
+
+    async def _settle_stale(
+        self,
+        stale: object,
+        target: TargetRecord,
+        stale_trust: tuple[bool, str | None] | None,
+        root_ca: str | None,
+    ) -> None:
+        if stale_trust is None:
+            mode = InvalidationMode.CANCEL
+        else:
+            previous_verify, previous_root_ca = stale_trust
+            tightened = not previous_verify and target.verify_ssl
+            trust_replaced = previous_root_ca != root_ca
+            mode = (
+                InvalidationMode.CANCEL
+                if tightened or trust_replaced
+                else InvalidationMode.DRAIN
+            )
+        if mode is InvalidationMode.CANCEL:
+            await stale.cancel()
+        else:
+            await stale.drain()
+        await stale.aclose()
 
     def _build_client(
         self,
@@ -169,6 +200,7 @@ class BackendClientPool:
                 return InvalidationResult(change, mode, 0, 0)
             inflight = client.mark_closed()
             self._clients.pop(change.target_id, None)
+            self._trust.pop(change.target_id, None)
         if mode is InvalidationMode.CANCEL:
             cancelled = await client.cancel()
             drained = 0
@@ -183,6 +215,7 @@ class BackendClientPool:
         async with self._lock:
             clients = tuple(self._clients.values())
             self._clients.clear()
+            self._trust.clear()
         for client in clients:
             client.mark_closed()
             await client.aclose()

@@ -16,7 +16,11 @@ from vcf_ops_mcp.contracts import (
     TargetRecord,
 )
 from vcf_ops_mcp.mcp_server import BackendClientPool
-from vcf_ops_mcp.vcenter import VcenterTargetClient, list_vcenter_vms
+from vcf_ops_mcp.vcenter import (
+    VcenterTargetClient,
+    list_vcenter_hosts,
+    list_vcenter_vms,
+)
 from vcf_ops_mcp.vcf.caps import MAX_UPSTREAM_RESPONSE_BYTES
 from vcf_ops_mcp.vcf.client import TargetCredentials
 from vcf_ops_mcp.vcf.errors import (
@@ -24,17 +28,23 @@ from vcf_ops_mcp.vcf.errors import (
     ReauthenticationExhausted,
     ResultCapExceeded,
     TargetConfigurationSuperseded,
+    UpstreamProtocolError,
 )
 
 
-def target(*, generation: int = 1) -> TargetRecord:
+def target(
+    *,
+    generation: int = 1,
+    verify_ssl: bool = False,
+    target_id: str = "fixture-vcenter",
+) -> TargetRecord:
     return TargetRecord(
-        id=TargetId("fixture-vcenter"),
-        name="fixture-vcenter",
+        id=TargetId(target_id),
+        name=target_id,
         fqdn="vcenter.example.internal",
         posture=TargetPosture.READ_ONLY,
         is_prod=False,
-        verify_ssl=False,
+        verify_ssl=verify_ssl,
         auth_source="LOCAL",
         configuration_generation=ConfigurationGeneration(generation),
         backend=BackendKind.VCENTER,
@@ -294,6 +304,8 @@ class PoolClient:
         self.is_closed = False
         self.drain_started = asyncio.Event()
         self.release_drain = asyncio.Event()
+        self.drained = False
+        self.cancelled = False
         self.fully_closed = False
 
     def mark_closed(self) -> int:
@@ -303,9 +315,11 @@ class PoolClient:
     async def drain(self) -> None:
         self.drain_started.set()
         await self.release_drain.wait()
+        self.drained = True
 
     async def cancel(self) -> int:
-        return 0
+        self.cancelled = True
+        return 1
 
     async def aclose(self) -> None:
         self.fully_closed = True
@@ -342,3 +356,100 @@ async def test_pool_detaches_a_draining_client_before_serving_new_calls() -> Non
     assert result.drained_requests == 1
     assert original.fully_closed
     await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pool_get_drains_a_superseded_client_without_holding_the_lock() -> None:
+    pack = load_backend_packs()[BackendKind.VCENTER]
+    clients: list[PoolClient] = []
+
+    def factory(record: TargetRecord, _credentials, _root_ca) -> PoolClient:
+        client = PoolClient(record)
+        clients.append(client)
+        return client
+
+    pool = BackendClientPool(PoolRepository(), pack, client_factory=factory)
+    original = await pool.get(target(generation=1))
+    refresh = asyncio.create_task(pool.get(target(generation=2)))
+    await original.drain_started.wait()
+
+    assert original.is_closed
+    assert not original.fully_closed
+    assert not original.cancelled
+
+    concurrent = await asyncio.wait_for(pool.get(target(generation=2)), timeout=1)
+    other = await asyncio.wait_for(
+        pool.get(target(generation=1, target_id="other-vcenter")), timeout=1
+    )
+    assert concurrent is not original
+    assert other is not original
+
+    original.release_drain.set()
+    replacement = await refresh
+    assert replacement is concurrent
+    assert original.drained
+    assert not original.cancelled
+    assert original.fully_closed
+    await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pool_get_cancels_a_superseded_client_on_tls_tightening() -> None:
+    pack = load_backend_packs()[BackendKind.VCENTER]
+
+    def factory(record: TargetRecord, _credentials, _root_ca) -> PoolClient:
+        return PoolClient(record)
+
+    pool = BackendClientPool(PoolRepository(), pack, client_factory=factory)
+    original = await pool.get(target(generation=1, verify_ssl=False))
+    replacement = await pool.get(target(generation=2, verify_ssl=True))
+    assert replacement is not original
+    assert original.cancelled
+    assert not original.drained
+    assert original.fully_closed
+    await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pool_get_cancels_a_superseded_client_on_trust_replacement() -> None:
+    pack = load_backend_packs()[BackendKind.VCENTER]
+
+    class RotatingCaRepository(PoolRepository):
+        def __init__(self) -> None:
+            self.root_ca: str | None = None
+
+        async def get_root_ca(self, _target_id: TargetId) -> str | None:
+            return self.root_ca
+
+    def factory(record: TargetRecord, _credentials, _root_ca) -> PoolClient:
+        return PoolClient(record)
+
+    repository = RotatingCaRepository()
+    pool = BackendClientPool(repository, pack, client_factory=factory)
+    original = await pool.get(target(generation=1))
+    repository.root_ca = "-----BEGIN CERTIFICATE-----\nsynthetic\n"
+    replacement = await pool.get(target(generation=2))
+    assert replacement is not original
+    assert original.cancelled
+    assert not original.drained
+    assert original.fully_closed
+    await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_vcenter_list_handlers_reject_a_non_list_success_body() -> None:
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/session" and request.method == "POST":
+            return httpx.Response(201, json="fixture-session")
+        if request.url.path == "/api/session" and request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(200, json={"value": []})
+
+    client = client_for(appliance)
+    try:
+        with pytest.raises(UpstreamProtocolError, match="was not a list"):
+            await list_vcenter_vms(client)
+        with pytest.raises(UpstreamProtocolError, match="was not a list"):
+            await list_vcenter_hosts(client)
+    finally:
+        await client.aclose()
