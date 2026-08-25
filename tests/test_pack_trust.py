@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from vcf_mcp.backend_packs import DEFAULT_PACKS_PATH, load_backend_packs
@@ -35,8 +37,8 @@ def _fake_cosign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
     executable = tmp_path / "cosign"
     arguments = tmp_path / "cosign-arguments"
     executable.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$COSIGN_ARGS_FILE\"\n"
-        "exit \"$COSIGN_EXIT_CODE\"\n"
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$COSIGN_ARGS_FILE"\n'
+        'exit "$COSIGN_EXIT_CODE"\n'
     )
     executable.chmod(0o755)
     monkeypatch.setenv("COSIGN_ARGS_FILE", str(arguments))
@@ -112,6 +114,54 @@ async def test_signature_mismatch_is_refused_and_audited(
 
     events = await repository.configuration_events()
     assert events[0]["event_type"] == "pack_signature_refused"
+
+
+@pytest.mark.asyncio
+async def test_refresh_persists_beside_packs_and_overrides_immutable_image_root(
+    repository: RuntimeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cosign, arguments_path = _fake_cosign(tmp_path, monkeypatch)
+    manager = _manager(repository, tmp_path, cosign)
+    shipped_content = manager.shipped_trust_root_path.read_bytes()
+    manager.shipped_trust_root_path.chmod(0o444)
+    refreshed_content = b'{"certificateAuthorities":[{"refreshed":true}]}'
+
+    class FixtureClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FixtureClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=refreshed_content,
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FixtureClient)
+
+    digest = await manager.refresh_trust_root()
+
+    assert digest == hashlib.sha256(refreshed_content).hexdigest()
+    assert manager.shipped_trust_root_path.read_bytes() == shipped_content
+    assert manager.persisted_trust_root_path.read_bytes() == refreshed_content
+    assert manager.trust_root_path == manager.persisted_trust_root_path
+
+    await manager.install_manual(
+        (DEFAULT_PACKS_PATH / "ops.json").read_bytes(),
+        b'{"fixture":"bundle"}',
+    )
+    arguments = arguments_path.read_text().splitlines()
+    assert arguments[arguments.index("--trusted-root") + 1] == str(
+        manager.persisted_trust_root_path
+    )
 
 
 @pytest.mark.asyncio

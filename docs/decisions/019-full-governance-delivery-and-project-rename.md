@@ -66,6 +66,14 @@ Files under `docs/decisions`, `docs/artifacts`, and `docs/history` that predate
 this change remain byte-identical. They are evidence of the project name and
 paths that existed when those records were written.
 
+Firstmate decided the three findings from the single external review round
+under the lane's standing autonomy. The captain did not review those findings.
+The refreshed trust root therefore persists on the writable data volume and
+takes precedence over the immutable image default, an all-target integrity
+failure retains its fatal exception through bootstrap, and a quarantined
+target returns to service only after every resulting envelope verifies. These
+are defect corrections to the settled contract, not new product scope.
+
 ## Operational consequence
 
 Mode changes have an intentionally broad and recoverable blast radius: all old

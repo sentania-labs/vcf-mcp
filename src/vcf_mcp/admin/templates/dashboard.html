@@ -167,6 +167,7 @@
       </div>
       <label><input type="checkbox" name="verify_ssl" {% if target.verify_ssl %}checked{% endif %}> Enable TLS certificate verification for this backend</label>
       <p class="muted">Enabling verification or replacing trust material cancels in-flight requests immediately. Other edits drain and discard superseded results.</p>
+      {% if not target.is_usable %}<p class="warning">This target is quarantined. Supply both credentials and replace or remove the stored root CA before it can return to service.</p>{% endif %}
       {% if target.is_prod %}<p class="warning">Production identity is derived from this FQDN and remains read-only.</p>{% endif %}
       <button type="submit">Save target changes</button>
     </form>
@@ -263,7 +264,7 @@
   </form>
   <form method="post" action="/admin/packs/trust-root/refresh">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <p class="muted">Trust-root refresh uses the fixed Sigstore URL compiled into this build. No operator URL is accepted.</p>
+    <p class="muted">Trust-root refresh uses the fixed Sigstore URL compiled into this build. The refreshed copy is stored on the persistent data volume and takes precedence over the immutable image copy. No operator URL is accepted.</p>
     <button type="submit">Refresh pack trust root</button>
   </form>
   {% if retained_pack_versions %}

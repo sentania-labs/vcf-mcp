@@ -141,6 +141,9 @@ class RuntimeRepository:
                 )
                 self._load_or_create_keyring(refuse_generation=has_credentials)
                 self._verify_target_integrity_at_startup()
+            except AllTargetsIntegrityFailed:
+                self.close()
+                raise
             except (
                 OSError,
                 sqlite3.Error,
@@ -317,9 +320,7 @@ class RuntimeRepository:
     async def authorization_mode(self) -> AuthorizationMode:
         return await asyncio.to_thread(self._authorization_mode_sync)
 
-    async def set_authorization_mode(
-        self, mode: AuthorizationMode | str
-    ) -> int:
+    async def set_authorization_mode(self, mode: AuthorizationMode | str) -> int:
         return await asyncio.to_thread(self._set_authorization_mode_sync, mode)
 
     async def clear_auth_lockout(self, target_id: TargetId) -> bool:
@@ -341,7 +342,9 @@ class RuntimeRepository:
     async def rotation_status(self) -> dict[str, int | str] | None:
         return await asyncio.to_thread(self._rotation_status_sync)
 
-    async def configuration_events(self, *, limit: int = 100) -> tuple[dict[str, object], ...]:
+    async def configuration_events(
+        self, *, limit: int = 100
+    ) -> tuple[dict[str, object], ...]:
         return await asyncio.to_thread(self._configuration_events_sync, limit)
 
     async def backup_database(self, destination: Path) -> Path:
@@ -463,9 +466,7 @@ class RuntimeRepository:
                     "ALTER TABLE api_keys ADD COLUMN allowed_endpoints_json TEXT"
                     ' NOT NULL DEFAULT \'["ops","vcf"]\''
                 )
-                connection.execute(
-                    "UPDATE schema_version SET version = 3"
-                )
+                connection.execute("UPDATE schema_version SET version = 3")
             except BaseException:
                 connection.rollback()
                 raise
@@ -514,9 +515,7 @@ class RuntimeRepository:
                 )
                 connection.execute("DROP TABLE targets")
                 connection.execute("ALTER TABLE targets_v3 RENAME TO targets")
-                connection.execute(
-                    "UPDATE schema_version SET version = 3"
-                )
+                connection.execute("UPDATE schema_version SET version = 3")
                 connection.commit()
             except BaseException:
                 connection.rollback()
@@ -946,7 +945,9 @@ class RuntimeRepository:
             raise ValueError("target name is required")
         if posture is TargetPosture.ACTIONS_ENABLED:
             if normalized_fqdn == PRODUCTION_FQDN:
-                raise ValueError("the production appliance is hard-blocked from actions")
+                raise ValueError(
+                    "the production appliance is hard-blocked from actions"
+                )
             if not self._all_active_packs_trusted_sync():
                 raise ValueError(
                     "actions require every active backend pack to be trusted"
@@ -981,6 +982,17 @@ class RuntimeRepository:
                 root_ca_envelope = None
             elif normalized_ca is not None:
                 root_ca_envelope = self._encrypt(target_id, "root_ca", normalized_ca)
+            if row["unusable_reason"] is not None:
+                try:
+                    self._decrypt(target_id, "username", username_envelope)
+                    self._decrypt(target_id, "password", password_envelope)
+                    if root_ca_envelope is not None:
+                        self._decrypt(target_id, "root_ca", root_ca_envelope)
+                except RuntimeStoreUnavailable as exc:
+                    raise ValueError(
+                        "target remains quarantined: the stored root CA must be"
+                        " replaced or removed"
+                    ) from exc
             is_prod = normalized_fqdn == PRODUCTION_FQDN
             try:
                 connection.execute(
@@ -1027,7 +1039,9 @@ class RuntimeRepository:
             raise ValueError("production identity is derived from its FQDN")
         if target.posture is TargetPosture.ACTIONS_ENABLED:
             if target.is_prod:
-                raise ValueError("the production appliance is hard-blocked from actions")
+                raise ValueError(
+                    "the production appliance is hard-blocked from actions"
+                )
             if not self._all_active_packs_trusted_sync():
                 raise ValueError(
                     "actions require every active backend pack to be trusted"
@@ -1066,14 +1080,14 @@ class RuntimeRepository:
 
     def _authorization_mode_sync(self) -> AuthorizationMode:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT value FROM settings WHERE name = 'authorization_mode'"
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute("SELECT value FROM settings WHERE name = 'authorization_mode'")
+                .fetchone()
+            )
             return AuthorizationMode.LOCAL if row is None else AuthorizationMode(row[0])
 
-    def _set_authorization_mode_sync(
-        self, mode: AuthorizationMode | str
-    ) -> int:
+    def _set_authorization_mode_sync(self, mode: AuthorizationMode | str) -> int:
         selected = AuthorizationMode(mode)
         with self._write_transaction() as connection:
             current = self._authorization_mode_sync()
@@ -1109,24 +1123,25 @@ class RuntimeRepository:
         details: Mapping[str, object],
     ) -> None:
         connection.execute(
-            "INSERT INTO configuration_events(event_type, details_json)"
-            " VALUES (?, ?)",
+            "INSERT INTO configuration_events(event_type, details_json) VALUES (?, ?)",
             (
                 event_type,
                 json.dumps(details, sort_keys=True, separators=(",", ":")),
             ),
         )
 
-    def _configuration_events_sync(
-        self, limit: int
-    ) -> tuple[dict[str, object], ...]:
+    def _configuration_events_sync(self, limit: int) -> tuple[dict[str, object], ...]:
         bounded = max(1, min(limit, 500))
         with self._lock:
-            rows = self._connection_or_raise().execute(
-                "SELECT event_type, details_json, created_at"
-                " FROM configuration_events ORDER BY id DESC LIMIT ?",
-                (bounded,),
-            ).fetchall()
+            rows = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT event_type, details_json, created_at"
+                    " FROM configuration_events ORDER BY id DESC LIMIT ?",
+                    (bounded,),
+                )
+                .fetchall()
+            )
             return tuple(
                 {
                     "event_type": row["event_type"],
@@ -1145,9 +1160,13 @@ class RuntimeRepository:
 
     def _unsigned_packs_allowed_sync(self) -> bool:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT value FROM settings WHERE name = 'unsigned_packs_allowed'"
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings WHERE name = 'unsigned_packs_allowed'"
+                )
+                .fetchone()
+            )
             return bool(row and row[0] == "1")
 
     def _set_unsigned_packs_allowed_sync(self, allowed: bool) -> None:
@@ -1171,15 +1190,24 @@ class RuntimeRepository:
 
     def _has_actions_enabled_target_sync(self) -> bool:
         with self._lock:
-            return self._connection_or_raise().execute(
-                "SELECT 1 FROM targets WHERE posture = 'actions_enabled' LIMIT 1"
-            ).fetchone() is not None
+            return (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT 1 FROM targets WHERE posture = 'actions_enabled' LIMIT 1"
+                )
+                .fetchone()
+                is not None
+            )
 
     def _all_active_packs_trusted_sync(self) -> bool:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT value FROM settings WHERE name = 'all_active_packs_trusted'"
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings WHERE name = 'all_active_packs_trusted'"
+                )
+                .fetchone()
+            )
             return bool(row and row[0] == "1")
 
     def _record_auth_failure_sync(self, target_id: TargetId) -> bool:
@@ -1297,7 +1325,9 @@ class RuntimeRepository:
                     envelope = row[column]
                     if envelope is not None:
                         updates[column] = self._encrypt(
-                            target_id, purpose, self._decrypt(target_id, purpose, envelope)
+                            target_id,
+                            purpose,
+                            self._decrypt(target_id, purpose, envelope),
                         )
                 connection.execute(
                     "UPDATE targets SET username_envelope = ?,"
@@ -1335,9 +1365,11 @@ class RuntimeRepository:
 
     def _rotation_status_sync(self) -> dict[str, int | str] | None:
         with self._lock:
-            row = self._connection_or_raise().execute(
-                "SELECT * FROM credential_rotation WHERE singleton = 1"
-            ).fetchone()
+            row = (
+                self._connection_or_raise()
+                .execute("SELECT * FROM credential_rotation WHERE singleton = 1")
+                .fetchone()
+            )
             return None if row is None else self._rotation_status_from_row(row)
 
     @staticmethod
@@ -1361,8 +1393,7 @@ class RuntimeRepository:
         connection = self._connection_or_raise()
         referenced: set[str] = set()
         for row in connection.execute(
-            "SELECT username_envelope, password_envelope, root_ca_envelope"
-            " FROM targets"
+            "SELECT username_envelope, password_envelope, root_ca_envelope FROM targets"
         ).fetchall():
             for envelope in row:
                 if envelope is not None:
@@ -1445,9 +1476,7 @@ class RuntimeRepository:
                     default_rows = connection.execute(
                         "SELECT id FROM targets WHERE unusable_reason IS NULL"
                     ).fetchall()
-                selected_targets = frozenset(
-                    TargetId(row[0]) for row in default_rows
-                )
+                selected_targets = frozenset(TargetId(row[0]) for row in default_rows)
             if not selected_targets:
                 raise ValueError("at least one usable target must be allowed")
             placeholders = ",".join("?" for _ in selected_targets)

@@ -24,8 +24,7 @@ PACK_CERTIFICATE_IDENTITY = (
 )
 PACK_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com"
 PACK_FEED_URL = (
-    "https://github.com/sentania-labs/vcf-mcp/"
-    "releases/download/backend-packs/feed.json"
+    "https://github.com/sentania-labs/vcf-mcp/releases/download/backend-packs/feed.json"
 )
 TRUST_ROOT_REFRESH_URL = (
     "https://raw.githubusercontent.com/sigstore/root-signing/"
@@ -33,6 +32,7 @@ TRUST_ROOT_REFRESH_URL = (
 )
 DEFAULT_PACK_STORE = Path("/data/backend-packs")
 DEFAULT_TRUST_ROOT = Path("/app/trust/sigstore-trusted-root.json")
+PERSISTED_TRUST_ROOT_NAME = "sigstore-trusted-root.json"
 DEFAULT_COSIGN = Path("/usr/local/bin/cosign")
 MAX_PACK_BYTES = 4 * 1024 * 1024
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
@@ -63,6 +63,7 @@ class PackTrustManager:
         *,
         store_path: Path = DEFAULT_PACK_STORE,
         trust_root_path: Path = DEFAULT_TRUST_ROOT,
+        persisted_trust_root_path: Path | None = None,
         cosign_path: Path = DEFAULT_COSIGN,
         temp_path: Path = Path("/tmp"),
     ) -> None:
@@ -71,9 +72,22 @@ class PackTrustManager:
         self.active_path = self.store_path / "active"
         self.staged_path = self.store_path / "staged"
         self.retained_path = self.store_path / "retained"
-        self.trust_root_path = Path(trust_root_path)
+        self.shipped_trust_root_path = Path(trust_root_path)
+        self.persisted_trust_root_path = (
+            Path(persisted_trust_root_path)
+            if persisted_trust_root_path is not None
+            else self.store_path / "trust" / PERSISTED_TRUST_ROOT_NAME
+        )
         self.cosign_path = Path(cosign_path)
         self.temp_path = Path(temp_path)
+
+    @property
+    def trust_root_path(self) -> Path:
+        """Return the operator-refreshed root when present, else the image root."""
+
+        if self.persisted_trust_root_path.is_file():
+            return self.persisted_trust_root_path
+        return self.shipped_trust_root_path
 
     def verify_active_at_startup(self) -> dict[BackendKind, str | None]:
         """Re-verify every active pack before the registry can see it."""
@@ -110,8 +124,12 @@ class PackTrustManager:
             self._install_manual_sync, pack_bytes, bundle_bytes
         )
 
-    async def rollback(self, backend: BackendKind | str, version: str) -> PackInstallResult:
-        return await asyncio.to_thread(self._rollback_sync, BackendKind(backend), version)
+    async def rollback(
+        self, backend: BackendKind | str, version: str
+    ) -> PackInstallResult:
+        return await asyncio.to_thread(
+            self._rollback_sync, BackendKind(backend), version
+        )
 
     async def install_staged(
         self, backend: BackendKind | str, digest: str
@@ -128,7 +146,12 @@ class PackTrustManager:
         if len(content) > MAX_TRUST_ROOT_BYTES:
             raise PackTrustError("refreshed trust root exceeds the size limit")
         _validate_trust_root(content)
-        await asyncio.to_thread(_atomic_private_write, self.trust_root_path, content)
+        try:
+            await asyncio.to_thread(
+                _atomic_private_write, self.persisted_trust_root_path, content
+            )
+        except OSError as exc:
+            raise PackTrustError("refreshed trust root could not be persisted") from exc
         digest = hashlib.sha256(content).hexdigest()
         await self._repository.record_configuration_event(
             "pack_trust_root_refreshed", {"digest": digest}
@@ -154,7 +177,11 @@ class PackTrustManager:
     async def install_from_feed(self, entry_id: str) -> PackInstallResult:
         entries = await self.feed_catalog()
         entry = next(
-            (candidate for candidate in entries if str(candidate.get("id")) == entry_id),
+            (
+                candidate
+                for candidate in entries
+                if str(candidate.get("id")) == entry_id
+            ),
             None,
         )
         if entry is None:
@@ -179,9 +206,7 @@ class PackTrustManager:
             if path.name.endswith(".sigstore.json"):
                 continue
             pack = self._load_one(path)
-            versions.append(
-                {"backend": pack.backend.value, "version": pack.version}
-            )
+            versions.append({"backend": pack.backend.value, "version": pack.version})
         return tuple(versions)
 
     def _install_manual_sync(
@@ -291,7 +316,9 @@ class PackTrustManager:
         candidate_bytes: bytes | None = None,
     ) -> PackInstallResult:
         pack = pack or self._load_one(candidate)
-        content = candidate_bytes if candidate_bytes is not None else candidate.read_bytes()
+        content = (
+            candidate_bytes if candidate_bytes is not None else candidate.read_bytes()
+        )
         if hashlib.sha256(content).hexdigest() != pack.digest:
             raise PackTrustError("verified pack changed before activation")
         signed = bundle is not None
@@ -403,7 +430,11 @@ def _install_result(pack: BackendPack, *, signed: bool) -> PackInstallResult:
 
 
 def _safe_version(version: str) -> str:
-    if not version or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in version):
+    if not version or any(
+        character
+        not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for character in version
+    ):
         raise PackTrustError("pack version is not filesystem-safe")
     return version
 

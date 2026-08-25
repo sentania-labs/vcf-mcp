@@ -73,9 +73,10 @@ Operator packs are installed from the admin UI, either through the fixed feed
 or by uploading a pack and its Sigstore bundle. The container runs digest-pinned
 cosign and pins verification to
 `.github/workflows/release-packs.yml@refs/heads/main` with the GitHub Actions
-issuer. The trust root is baked into the image and can be refreshed only from
-the fixed URL compiled into the build. Installation and rollback stage files
-for the next restart because the active registry stays frozen. Unsigned install
+issuer. The immutable default trust root is baked into the image. An operator
+refresh from the fixed URL is persisted on `/data` and takes precedence when
+present. Installation and rollback stage files for the next restart because the
+active registry stays frozen. Unsigned install
 is off by default, persistently flagged when enabled, and refused whenever any
 target permits actions. Fingerprint pinning remains intentionally excluded.
 Uploaded CA bundles are the appliance TLS trust mechanism.
@@ -170,7 +171,7 @@ available for orchestrated deployments.
 
 | Volume path | Contents |
 | --- | --- |
-| `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and CA envelopes, and API-key digests |
+| `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and CA envelopes, API-key digests, operator packs, and the persisted refreshed pack trust root |
 | `/keys` | Session secret, audit digest key, AES-256-GCM credential keyring, and optional one-use admin bootstrap file |
 | `/audit` | Append-only SQLite audit ledger |
 

@@ -23,6 +23,7 @@ from vcf_mcp.contracts import (
     TargetPosture,
 )
 from vcf_mcp.runtime_repository import (
+    AllTargetsIntegrityFailed,
     PRODUCTION_FQDN,
     RuntimeRepository,
     RuntimeStoreUnavailable,
@@ -453,7 +454,9 @@ async def test_credential_rotation_resumes_after_restart_and_retires_old_key(
         assert final["state"] == "complete"
         for index, target in enumerate(targets):
             credentials = await resumed.get_credentials(target.id)
-            assert credentials.acquire_payload()["username"] == f"synthetic-reader-{index}"
+            assert (
+                credentials.acquire_payload()["username"] == f"synthetic-reader-{index}"
+            )
         keyring = json.loads(keyring_path.read_text())
         assert list(keyring["keys"]) == [keyring["active_key_id"]]
     finally:
@@ -479,7 +482,9 @@ async def test_database_backup_restores_with_separately_held_keyring(
     separate_keyring.parent.mkdir()
     shutil.copy2(repository.keyring_path, separate_keyring)
 
-    restored = RuntimeRepository(database_backup, separate_keyring, grantable_scopes=SCOPES)
+    restored = RuntimeRepository(
+        database_backup, separate_keyring, grantable_scopes=SCOPES
+    )
     restored.bootstrap()
     try:
         credentials = await restored.get_credentials(target.id)
@@ -539,8 +544,86 @@ async def test_startup_quarantines_one_bad_target_and_refuses_when_all_are_bad(
         )
         connection.commit()
     refused = RuntimeRepository(database_path, keyring_path, grantable_scopes=SCOPES)
-    with pytest.raises(RuntimeStoreUnavailable, match="unavailable"):
+    with pytest.raises(
+        AllTargetsIntegrityFailed,
+        match="every configured target failed credential integrity verification",
+    ):
         refused.bootstrap()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_requires_corrupt_root_ca_to_be_replaced_or_removed(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="damaged-ca",
+        fqdn="damaged-ca.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=True,
+        root_ca_pem=synthetic_ca_pem(),
+    )
+    await repository.create_target(
+        name="healthy",
+        fqdn="healthy.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    database_path = repository.database_path
+    keyring_path = repository.keyring_path
+    repository.close()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE targets SET root_ca_envelope = '{\"broken\":true}' WHERE id = ?",
+            (str(target.id),),
+        )
+        connection.commit()
+
+    reopened = RuntimeRepository(database_path, keyring_path, grantable_scopes=SCOPES)
+    reopened.bootstrap()
+    try:
+        quarantined = await reopened.get(target.id)
+        assert quarantined is not None and quarantined.is_usable is False
+        with pytest.raises(ValueError, match="root CA must be replaced or removed"):
+            await reopened.update_target(
+                target_id=target.id,
+                expected_generation=target.configuration_generation,
+                name=target.name,
+                fqdn=target.fqdn,
+                username="synthetic-new-reader",
+                password="synthetic-new-password",
+                auth_source=target.auth_source,
+                verify_ssl=False,
+                posture=TargetPosture.READ_ONLY,
+            )
+        still_quarantined = await reopened.get(target.id)
+        assert still_quarantined is not None
+        assert still_quarantined.is_usable is False
+        assert (
+            still_quarantined.configuration_generation
+            == target.configuration_generation
+        )
+
+        recovered, _ = await reopened.update_target(
+            target_id=target.id,
+            expected_generation=target.configuration_generation,
+            name=target.name,
+            fqdn=target.fqdn,
+            username="synthetic-new-reader",
+            password="synthetic-new-password",
+            auth_source=target.auth_source,
+            verify_ssl=False,
+            posture=TargetPosture.READ_ONLY,
+            clear_root_ca=True,
+        )
+        assert recovered.is_usable is True
+        assert recovered.has_custom_ca is False
+        assert await reopened.get_root_ca(target.id) is None
+    finally:
+        reopened.close()
 
 
 def test_aad_is_length_prefixed_and_has_no_delimiter_collision() -> None:
