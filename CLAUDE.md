@@ -16,11 +16,18 @@ content two ways: as MCP resources/prompts for full clients and via
 `list_skills`/`get_skill` tools for tool-calling-only consumers such as
 VCF Private AI Services. VCF Ops targets (FQDN, credentials, auth source)
 are post-deployment configuration entered through the admin UI, never
-baked into the image or CI. See `docs/SPEC.md` for the full deliverable
-definition, tool families, phases, and gates.
+baked into the image or CI.
 
-This is an unofficial, personal-lab project. The server self-describes as
-"Sentania VCF Ops MCP (unofficial)" in its MCP server-info. No agent
+Since the multi-backend prototype (decisions 016 and 017), the server is
+multi-backend: each registered product gets its own startup-frozen MCP
+endpoint (`/ops/mcp` for VCF Operations, `/vcenter/mcp` for vCenter,
+`/vcf/mcp` for read-only management), and backends are defined as
+data-only packs. `docs/SPEC.md` is the historical v1 design contract and
+is superseded wherever it disagrees with the captain's 2026-08-24
+kickoff specification (which lives outside this repo).
+
+This is an unofficial, personal-lab project. Every endpoint's MCP
+server-info self-describes as "Sentania ... (unofficial)". No agent
 uses Broadcom or VMware branding in a way that implies this is an official
 offering.
 
@@ -93,6 +100,6 @@ SDK), the admin UI stack, and the credential-store encryption design are
 round-1 architecture decisions, recorded in `docs/decisions/` before code
 depends on them; do not pre-empt them by importing a framework in a
 worktree ahead of the decision. CI builds one container image to
-`ghcr.io/sentania-labs/vcf-ops-mcp` on self-hosted runners and deploys to
+`ghcr.io/sentania-labs/vcf-mcp` on self-hosted runners and deploys to
 the docker.int slot; deployment configuration (which is not credentials)
 lives in repo Actions secrets per the CI-native standard.

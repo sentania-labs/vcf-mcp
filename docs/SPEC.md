@@ -1,5 +1,10 @@
 # SPEC, vcf-ops-mcp (v1.0)
 
+> **Historical note (2026-08-25).** This v1 design contract is superseded
+> on any point where it disagrees with the captain's 2026-08-24 kickoff
+> specification for the multi-backend vcf-mcp product. See
+> `docs/decisions/017-multi-backend-doc-alignment.md`.
+
 An unofficial, container-based MCP server plus small admin web UI for VCF
 Operations, deployed on the lab's docker.int container host behind
 fleet-caddy at `https://vcf-ops-mcp.int.sentania.net`. Comparable in
