@@ -716,6 +716,11 @@ def test_console_governs_global_ca_lifecycle_and_names_removal_impact(
             assert target.name in impact_page.text
             assert target.fqdn in impact_page.text
             assert "Trusted CA sources:</strong>\n      appliance CA" in impact_page.text
+            target_digest = re.search(
+                r'name="affected_targets_digest" value="([a-f0-9]+)"',
+                impact_page.text,
+            )
+            assert target_digest is not None
 
             unconfirmed = client.post(
                 "/admin/global-root-ca/remove",
@@ -727,7 +732,11 @@ def test_console_governs_global_ca_lifecycle_and_names_removal_impact(
 
             removed = client.post(
                 "/admin/global-root-ca/remove",
-                data={"csrf_token": csrf(), "confirm_remove": "on"},
+                data={
+                    "csrf_token": csrf(),
+                    "confirm_remove": "on",
+                    "affected_targets_digest": target_digest.group(1),
+                },
                 follow_redirects=False,
             )
             assert removed.status_code == 303
@@ -745,6 +754,69 @@ def test_console_governs_global_ca_lifecycle_and_names_removal_impact(
             ("all", InvalidationMode.CANCEL),
             ("all", InvalidationMode.CANCEL),
         ]
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_global_ca_removal_rejects_changed_target_set(tmp_path: Path) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    asyncio.run(runtime.set_global_root_ca(synthetic_ca_pem()))
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-admin-password",
+                },
+            )
+            page = client.get("/admin?tab=targets")
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+            digest = re.search(
+                r'name="affected_targets_digest" value="([a-f0-9]+)"', page.text
+            )
+            assert csrf is not None and digest is not None
+            asyncio.run(
+                runtime.create_target(
+                    name="new-target",
+                    fqdn="new-target.example.internal",
+                    username="synthetic-reader",
+                    password="synthetic-password",
+                    auth_source="LOCAL",
+                    verify_ssl=True,
+                    backend=BackendKind.VCENTER,
+                )
+            )
+
+            refused = client.post(
+                "/admin/global-root-ca/remove",
+                data={
+                    "csrf_token": csrf.group(1),
+                    "confirm_remove": "on",
+                    "affected_targets_digest": digest.group(1),
+                },
+            )
+
+            assert refused.status_code == 409
+            assert "target set changed since this page loaded" in refused.text
+            assert "new-target" in refused.text
+            assert asyncio.run(runtime.get_global_root_ca()) is not None
     finally:
         runtime.close()
         audit.close()

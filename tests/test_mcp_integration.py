@@ -16,10 +16,11 @@ from starlette.testclient import TestClient
 from vcf_mcp.app import create_app
 from vcf_mcp.audit import SqliteAuditRepository
 from vcf_mcp.backend_packs import load_backend_packs
-from vcf_mcp.contracts import BackendKind, Capability
+from vcf_mcp.contracts import BackendKind, Capability, InvalidationMode
 from vcf_mcp.declared_backend import DeclaredBackendClient
 from vcf_mcp.mcp_server import (
     BackendClientPool,
+    CompositeInvalidator,
     build_mcp_surfaces,
     implemented_scopes,
 )
@@ -33,6 +34,30 @@ from vcf_mcp.vcf.outbound import OutboundAllowlist
 
 ROOT = Path(__file__).resolve().parents[1]
 FAR_FUTURE_MS = 4_102_444_800_000
+
+
+def test_composite_invalidator_attempts_every_pool() -> None:
+    calls: list[str] = []
+
+    class Pool:
+        def __init__(self, name: str, *, fails: bool = False) -> None:
+            self.name = name
+            self.fails = fails
+
+        async def invalidate_all(self, *, mode: InvalidationMode) -> None:
+            calls.append(self.name)
+            if self.fails:
+                raise RuntimeError(self.name)
+
+    invalidator = CompositeInvalidator(
+        (Pool("first", fails=True), Pool("second"), Pool("third", fails=True))
+    )
+
+    with pytest.raises(ExceptionGroup) as raised:
+        asyncio.run(invalidator.invalidate_all(mode=InvalidationMode.CANCEL))
+
+    assert calls == ["first", "second", "third"]
+    assert [str(error) for error in raised.value.exceptions] == ["first", "third"]
 
 
 def synthetic_ca_pem() -> str:

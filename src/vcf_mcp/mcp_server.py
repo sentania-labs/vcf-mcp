@@ -342,8 +342,14 @@ class CompositeInvalidator:
     async def invalidate_all(self, *, mode: InvalidationMode) -> None:
         """Fan an appliance trust change out to every backend pool."""
 
+        failures: list[Exception] = []
         for pool in self._pools:
-            await pool.invalidate_all(mode=mode)
+            try:
+                await pool.invalidate_all(mode=mode)
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("backend pool invalidation failures", failures)
 
 
 @dataclass(frozen=True, slots=True)

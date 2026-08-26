@@ -144,6 +144,7 @@
   </ul>
   <form method="post" action="/admin/global-root-ca/remove">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="affected_targets_digest" value="{{ removal_target_digest }}">
     <p class="warning">Removing the appliance CA removes this trust from these targets:</p>
     <ul>
       {% for target in targets %}
