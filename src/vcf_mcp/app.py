@@ -95,6 +95,7 @@ class StructuralAuditMiddleware(BaseHTTPMiddleware):
 
     _SECURITY_WRITE_PREFIXES = (
         "/admin/targets",
+        "/admin/global-root-ca",
         "/admin/keys",
         "/admin/authorization-mode",
         "/admin/credential-rotation",

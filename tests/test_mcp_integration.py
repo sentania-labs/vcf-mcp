@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from starlette.testclient import TestClient
 
 from vcf_mcp.app import create_app
@@ -14,7 +18,11 @@ from vcf_mcp.audit import SqliteAuditRepository
 from vcf_mcp.backend_packs import load_backend_packs
 from vcf_mcp.contracts import BackendKind, Capability
 from vcf_mcp.declared_backend import DeclaredBackendClient
-from vcf_mcp.mcp_server import build_mcp_surfaces, implemented_scopes
+from vcf_mcp.mcp_server import (
+    BackendClientPool,
+    build_mcp_surfaces,
+    implemented_scopes,
+)
 from vcf_mcp.runtime_repository import RuntimeRepository
 from vcf_mcp.skills import load_catalog
 from vcf_mcp.vcenter import VcenterTargetClient
@@ -25,6 +33,24 @@ from vcf_mcp.vcf.outbound import OutboundAllowlist
 
 ROOT = Path(__file__).resolve().parents[1]
 FAR_FUTURE_MS = 4_102_444_800_000
+
+
+def synthetic_ca_pem() -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "fixture root")])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
 class SyntheticOps:
@@ -199,6 +225,69 @@ def structured(response: httpx.Response) -> dict:
     payload = response.json()
     assert "structuredContent" in payload.get("result", {}), payload
     return payload["result"]["structuredContent"]
+
+
+@pytest.mark.asyncio
+async def test_backend_client_pool_receives_additive_effective_trust(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "config.sqlite3",
+        tmp_path / "keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    global_ca = synthetic_ca_pem()
+    target_ca = synthetic_ca_pem()
+    await runtime.set_global_root_ca(global_ca)
+    global_only = await runtime.create_target(
+        name="global-only",
+        fqdn="global-only.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=True,
+    )
+    additive = await runtime.create_target(
+        name="additive",
+        fqdn="additive.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=True,
+        root_ca_pem=target_ca,
+    )
+    received: dict[str, str | None] = {}
+
+    class CapturedClient:
+        def __init__(self, target) -> None:
+            self.configuration_generation = target.configuration_generation
+            self.is_closed = False
+
+        def mark_closed(self) -> int:
+            self.is_closed = True
+            return 0
+
+        async def aclose(self) -> None:
+            self.is_closed = True
+
+    def factory(target, _credentials, root_ca):
+        received[str(target.id)] = root_ca
+        return CapturedClient(target)
+
+    pool = BackendClientPool(
+        runtime,
+        load_backend_packs()[BackendKind.OPS],
+        client_factory=factory,
+    )
+    try:
+        await pool.get(global_only)
+        await pool.get(additive)
+        assert received[str(global_only.id)] == global_ca
+        assert received[str(additive.id)] == global_ca + target_ca
+    finally:
+        await pool.aclose()
+        runtime.close()
 
 
 def test_endpoint_surfaces_are_flat_typed_and_backend_specific(mcp_system) -> None:

@@ -343,6 +343,48 @@ async def post_target_update(request: Request):
     return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
 
 
+async def post_global_root_ca_set(request: Request):
+    form = await request.form()
+    try:
+        uploaded_ca = await _uploaded_text(form.get("root_ca"))
+        if uploaded_ca is None:
+            raise ValueError("select an appliance root CA bundle to upload")
+        await _repository(request).set_global_root_ca(uploaded_ca)
+        invalidator = getattr(request.app.state, "target_invalidator", None)
+        invalidate_all = getattr(invalidator, "invalidate_all", None)
+        if callable(invalidate_all):
+            await invalidate_all(mode=InvalidationMode.CANCEL)
+    except ValueError as exc:
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="targets"
+        )
+    auth.rotate_session(request)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
+
+
+async def post_global_root_ca_remove(request: Request):
+    form = await request.form()
+    repository = _repository(request)
+    affected = await repository.list()
+    if form.get("confirm_remove") != "on":
+        names = ", ".join(target.name for target in affected) or "no registered targets"
+        return await _dashboard_response(
+            request,
+            error=(
+                "Confirm removal after reviewing the affected targets: " + names + "."
+            ),
+            status_code=400,
+            active_tab="targets",
+        )
+    await repository.remove_global_root_ca()
+    invalidator = getattr(request.app.state, "target_invalidator", None)
+    invalidate_all = getattr(invalidator, "invalidate_all", None)
+    if callable(invalidate_all):
+        await invalidate_all(mode=InvalidationMode.CANCEL)
+    auth.rotate_session(request)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
+
+
 async def post_key_create(request: Request):
     check = await require_auth(request)
     if check:
@@ -829,11 +871,21 @@ async def _dashboard_response(
     selected_tab = active_tab or request.query_params.get("tab", "overview")
     if selected_tab not in DASHBOARD_TABS:
         selected_tab = "overview"
+    targets = await repository.list()
+    target_trust = {
+        target.id: await repository.get_effective_trust(target.id)
+        for target in targets
+    }
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
-            "targets": await repository.list(),
+            "targets": targets,
+            "target_trust": target_trust,
+            "global_root_ca": await repository.get_global_root_ca(),
+            "global_ca_fingerprints": (
+                await repository.get_global_root_ca_fingerprints()
+            ),
             "api_keys": await repository.list_api_keys(),
             "authorization_mode": await repository.authorization_mode(),
             "rotation_status": await repository.rotation_status(),
@@ -897,6 +949,20 @@ admin_routes = [
         "/admin/targets/{target_id}",
         endpoint=_degraded_to_503(
             _recent_reauth_post(post_target_update, tab="targets")
+        ),
+        methods=["POST"],
+    ),
+    Route(
+        "/admin/global-root-ca",
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_global_root_ca_set, tab="targets")
+        ),
+        methods=["POST"],
+    ),
+    Route(
+        "/admin/global-root-ca/remove",
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_global_root_ca_remove, tab="targets")
         ),
         methods=["POST"],
     ),

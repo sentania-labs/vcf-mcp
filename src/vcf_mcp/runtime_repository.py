@@ -24,7 +24,9 @@ import uuid
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
+from cryptography import x509
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from vcf_mcp.admin.auth import hash_password, verify_password
@@ -33,6 +35,7 @@ from vcf_mcp.contracts import (
     BackendKind,
     CapabilityName,
     ConfigurationGeneration,
+    EffectiveTargetTrust,
     KeyId,
     RequestIdentity,
     TargetConfigurationChange,
@@ -231,6 +234,29 @@ class RuntimeRepository:
 
     async def get_root_ca(self, target_id: TargetId) -> str | None:
         return await asyncio.to_thread(self._get_root_ca_sync, target_id)
+
+    async def get_global_root_ca(self) -> str | None:
+        return await asyncio.to_thread(self._get_global_root_ca_sync)
+
+    async def get_global_root_ca_fingerprints(self) -> tuple[str, ...]:
+        return await asyncio.to_thread(self._get_global_root_ca_fingerprints_sync)
+
+    async def get_effective_trust(
+        self, target_id: TargetId
+    ) -> EffectiveTargetTrust:
+        """Resolve global plus per-target trust without contacting the target."""
+
+        return await asyncio.to_thread(self._get_effective_trust_sync, target_id)
+
+    async def set_global_root_ca(self, root_ca_pem: str) -> str:
+        """Set or replace the appliance CA and return the audited action name."""
+
+        return await asyncio.to_thread(self._set_global_root_ca_sync, root_ca_pem)
+
+    async def remove_global_root_ca(self) -> tuple[TargetRecord, ...]:
+        """Remove appliance trust and return the targets that lost that trust."""
+
+        return await asyncio.to_thread(self._remove_global_root_ca_sync)
 
     async def update_target(
         self,
@@ -935,6 +961,104 @@ class RuntimeRepository:
             if envelope is None:
                 return None
             return self._decrypt(target_id, "root_ca", envelope)
+
+    def _get_global_root_ca_sync(self) -> str | None:
+        with self._lock:
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings WHERE name = 'global_root_ca_pem'"
+                )
+                .fetchone()
+            )
+            return None if row is None else str(row[0])
+
+    def _get_global_root_ca_fingerprints_sync(self) -> tuple[str, ...]:
+        return _certificate_fingerprints(self._get_global_root_ca_sync())
+
+    def _get_effective_trust_sync(
+        self, target_id: TargetId
+    ) -> EffectiveTargetTrust:
+        global_ca = self._get_global_root_ca_sync()
+        target = self._get_sync(target_id)
+        if target is None:
+            raise KeyError(f"unknown target: {target_id}")
+        target_ca_available = True
+        try:
+            target_ca = self._get_root_ca_sync(target_id)
+        except RuntimeStoreUnavailable:
+            if target.is_usable:
+                raise
+            target_ca = None
+            target_ca_available = False
+        bundle_parts = tuple(value for value in (global_ca, target_ca) if value)
+        return EffectiveTargetTrust(
+            root_ca_pem="".join(bundle_parts) or None,
+            global_ca_fingerprints=_certificate_fingerprints(global_ca),
+            target_ca_fingerprints=_certificate_fingerprints(target_ca),
+            global_ca_configured=global_ca is not None,
+            target_ca_configured=target.has_custom_ca,
+            target_ca_available=target_ca_available,
+        )
+
+    def _set_global_root_ca_sync(self, root_ca_pem: str) -> str:
+        normalized = _normalize_root_ca(root_ca_pem)
+        if normalized is None:
+            raise ValueError("the uploaded appliance root CA bundle is empty")
+        with self._write_transaction() as connection:
+            previous = connection.execute(
+                "SELECT value FROM settings WHERE name = 'global_root_ca_pem'"
+            ).fetchone()
+            event_type = (
+                "global_root_ca_set" if previous is None else "global_root_ca_replaced"
+            )
+            previous_ca = None if previous is None else str(previous[0])
+            connection.execute(
+                "INSERT INTO settings(name, value) VALUES"
+                " ('global_root_ca_pem', ?)"
+                " ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                (normalized,),
+            )
+            targets = self._list_sync()
+            self._append_configuration_event_sync(
+                connection,
+                event_type,
+                {
+                    "certificate_fingerprints": list(
+                        _certificate_fingerprints(normalized)
+                    ),
+                    "previous_certificate_fingerprints": list(
+                        _certificate_fingerprints(previous_ca)
+                    ),
+                    "affected_targets": [target.name for target in targets],
+                },
+            )
+            connection.commit()
+            return event_type
+
+    def _remove_global_root_ca_sync(self) -> tuple[TargetRecord, ...]:
+        with self._write_transaction() as connection:
+            previous = connection.execute(
+                "SELECT value FROM settings WHERE name = 'global_root_ca_pem'"
+            ).fetchone()
+            if previous is None:
+                return ()
+            targets = self._list_sync()
+            connection.execute(
+                "DELETE FROM settings WHERE name = 'global_root_ca_pem'"
+            )
+            self._append_configuration_event_sync(
+                connection,
+                "global_root_ca_removed",
+                {
+                    "removed_certificate_fingerprints": list(
+                        _certificate_fingerprints(str(previous[0]))
+                    ),
+                    "affected_targets": [target.name for target in targets],
+                },
+            )
+            connection.commit()
+            return targets
 
     def _update_target_sync(
         self,
@@ -1739,8 +1863,29 @@ def _normalize_root_ca(value: str | None) -> str | None:
     if len(normalized.encode("utf-8")) > 256 * 1024:
         raise ValueError("root CA bundle exceeds the 256 KiB limit")
     try:
+        certificates = x509.load_pem_x509_certificates(normalized.encode("utf-8"))
+        if not certificates:
+            raise ValueError
+        for certificate in certificates:
+            constraints = certificate.extensions.get_extension_for_class(
+                x509.BasicConstraints
+            ).value
+            if not constraints.ca:
+                raise ValueError
         context = ssl.create_default_context()
         context.load_verify_locations(cadata=normalized)
-    except ssl.SSLError as exc:
-        raise ValueError("root CA bundle is not valid PEM certificate data") from exc
+    except (ValueError, ssl.SSLError, x509.ExtensionNotFound) as exc:
+        raise ValueError(
+            "root CA bundle must contain valid PEM CA certificates"
+        ) from exc
     return normalized + "\n"
+
+
+def _certificate_fingerprints(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    certificates = x509.load_pem_x509_certificates(value.encode("utf-8"))
+    return tuple(
+        certificate.fingerprint(hashes.SHA256()).hex(":")
+        for certificate in certificates
+    )

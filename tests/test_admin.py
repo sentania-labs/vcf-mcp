@@ -75,6 +75,14 @@ def test_security_write_fails_closed_when_audit_degraded():
     assert resp.status_code == 503
     assert b"Audit is degraded" in resp.content
 
+    global_ca_resp = client.post(
+        "/admin/global-root-ca",
+        data={"csrf_token": "dummy"},
+        follow_redirects=False,
+    )
+    assert global_ca_resp.status_code == 503
+    assert b"Audit is degraded" in global_ca_resp.content
+
 def test_security_write_fails_invalid_csrf(logged_in_client):
     # audit is writable in this client
     resp = logged_in_client.post("/admin/targets", data={"csrf_token": "wrong"}, follow_redirects=False)

@@ -94,6 +94,26 @@ class TargetRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class EffectiveTargetTrust:
+    """Resolved CA trust for one target, available before any live request."""
+
+    root_ca_pem: str | None
+    global_ca_fingerprints: tuple[str, ...] = ()
+    target_ca_fingerprints: tuple[str, ...] = ()
+    global_ca_configured: bool = False
+    target_ca_configured: bool = False
+    target_ca_available: bool = True
+
+    @property
+    def uses_global_ca(self) -> bool:
+        return self.global_ca_configured
+
+    @property
+    def uses_target_ca(self) -> bool:
+        return self.target_ca_configured and self.target_ca_available
+
+
+@dataclass(frozen=True, slots=True)
 class RequestIdentity:
     """Immutable API-key identity resolved independently for one HTTP request."""
 
