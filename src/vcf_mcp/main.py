@@ -62,6 +62,32 @@ DEFAULT_PUBLIC_BASE_URL = "http://localhost:8000"
 DEFAULT_SKILLS_PATH = Path("/app/skills")
 
 
+def _exception_chain(exc: BaseException) -> str:
+    """Render the concrete startup cause without making operators read a trace."""
+
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip() or type(current).__name__
+        if not messages or message != messages[-1]:
+            messages.append(message)
+        current = current.__cause__ or current.__context__
+    return " -> ".join(messages)
+
+
+def _record_startup_error(
+    startup_errors: dict[str, str],
+    dependency: str,
+    summary: str,
+    exc: BaseException,
+) -> None:
+    reason = _exception_chain(exc)
+    startup_errors[dependency] = reason
+    LOGGER.exception("%s: %s", summary, reason)
+
+
 def create_production_app(
     *, restart_requester: Callable[[], None] | None = None
 ) -> Starlette:
@@ -71,18 +97,21 @@ def create_production_app(
         level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    startup_errors: dict[str, str] = {}
 
     audit_repository = SqliteAuditRepository(audit_db_path_from_environment())
     try:
         closed = audit_repository.bootstrap(recovered_at=datetime.now(UTC))
-    except Exception:
+    except Exception as exc:
         # Deliberately broad: any failure to open or reconcile the store is
         # the same operational fact, and the degraded posture above is the
         # same response to all of them.
-        LOGGER.exception(
-            "audit store at %s could not be opened; starting degraded and"
-            " reporting unhealthy until it can be",
-            audit_repository.path,
+        _record_startup_error(
+            startup_errors,
+            "audit",
+            f"audit store at {audit_repository.path} could not be opened;"
+            " starting degraded and reporting unhealthy until it can be",
+            exc,
         )
     else:
         if closed:
@@ -96,12 +125,15 @@ def create_production_app(
     session_secret_persistent = True
     try:
         session_secret = load_or_create_session_secret()
-    except Exception:
+    except Exception as exc:
         # A transient value lets the process expose a meaningful 503 instead
         # of crash-looping. Health remains false, so no traffic is routed and
         # no unstable session key is treated as production-ready.
-        LOGGER.exception(
-            "persistent session secret could not be loaded; starting degraded"
+        _record_startup_error(
+            startup_errors,
+            "session_secret",
+            "persistent session secret could not be loaded; starting degraded",
+            exc,
         )
         session_secret = secrets.token_urlsafe(48)
         session_secret_persistent = False
@@ -111,13 +143,16 @@ def create_production_app(
     audit_digest_key = None
     try:
         audit_digest_key = load_or_create_audit_digest_key()
-    except Exception:
+    except Exception as exc:
         # Without a durable digest key, identical arguments could never be
         # correlated across restarts, so the MCP surface is withheld and
         # readiness stays false instead of keying digests transiently.
-        LOGGER.exception(
+        _record_startup_error(
+            startup_errors,
+            "audit_digest_key",
             "audit argument digest key could not be loaded; the MCP surface"
-            " will not be built"
+            " will not be built",
+            exc,
         )
     else:
         LOGGER.info("audit argument digest key is ready")
@@ -126,8 +161,13 @@ def create_production_app(
     pack_configuration_ready = True
     try:
         packs = load_backend_packs(operator_path=None)
-    except Exception:
-        LOGGER.exception("backend packs could not be loaded; starting degraded")
+    except Exception as exc:
+        _record_startup_error(
+            startup_errors,
+            "configuration",
+            "backend packs could not be loaded; starting degraded",
+            exc,
+        )
         pack_configuration_ready = False
 
     runtime_repository = RuntimeRepository(
@@ -144,9 +184,12 @@ def create_production_app(
             "every configured backend failed credential integrity verification"
         )
         raise
-    except Exception:
-        LOGGER.exception(
-            "runtime configuration store could not be opened; starting degraded"
+    except Exception as exc:
+        _record_startup_error(
+            startup_errors,
+            "configuration",
+            "runtime configuration store could not be opened; starting degraded",
+            exc,
         )
         configuration_ready = False
     else:
@@ -171,11 +214,14 @@ def create_production_app(
             runtime_repository.set_pack_action_trust_at_startup(
                 all(digest is not None for digest in verified.values())
             )
-        except Exception:
-            LOGGER.exception(
+        except Exception as exc:
+            _record_startup_error(
+                startup_errors,
+                "pack_trust",
                 "active backend pack trust verification failed; the MCP"
                 " surface is withheld until the operator resolves it in the"
-                " admin UI"
+                " admin UI",
+                exc,
             )
             pack_trust_ready = False
             try:
@@ -190,10 +236,12 @@ def create_production_app(
     skills = None
     try:
         skills = load_catalog(skills_path)
-    except Exception:
-        LOGGER.exception(
-            "skills catalog at %s could not be loaded; starting degraded",
-            skills_path,
+    except Exception as exc:
+        _record_startup_error(
+            startup_errors,
+            "configuration",
+            f"skills catalog at {skills_path} could not be loaded; starting degraded",
+            exc,
         )
         configuration_ready = False
 
@@ -214,8 +262,13 @@ def create_production_app(
                 public_base_url=public_base_url,
                 packs=packs,
             )
-        except Exception:
-            LOGGER.exception("authenticated MCP surface could not be built")
+        except Exception as exc:
+            _record_startup_error(
+                startup_errors,
+                "mcp",
+                "authenticated MCP surface could not be built",
+                exc,
+            )
 
     if mcp_surfaces is not None:
         try:
@@ -234,4 +287,5 @@ def create_production_app(
         session_https_only=public_base_url.lower().startswith("https://"),
         pack_trust_manager=pack_trust_manager,
         restart_requester=restart_requester,
+        startup_errors=startup_errors,
     )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from starlette.applications import Starlette
@@ -80,6 +80,9 @@ async def healthz(request: Request) -> JSONResponse:
             if not healthy
         ]
         body["error"] = f"Unavailable dependencies: {', '.join(failed)}"
+        startup_errors = getattr(request.app.state, "startup_errors", {})
+        if startup_errors:
+            body["startup_errors"] = startup_errors
     return JSONResponse(body, status_code=200 if ready else 503)
 
 
@@ -133,6 +136,7 @@ def create_app(
     session_https_only: bool = True,
     pack_trust_manager: PackTrustManager | None = None,
     restart_requester: Callable[[], None] | None = None,
+    startup_errors: Mapping[str, str] | None = None,
 ) -> Starlette:
     """Compose the parent app while retaining explicit test seams."""
 
@@ -212,4 +216,5 @@ def create_app(
     app.state.mcp_surfaces = mcp_surfaces
     app.state.pack_trust_manager = pack_trust_manager
     app.state.restart_requester = restart_requester
+    app.state.startup_errors = dict(startup_errors or {})
     return app
