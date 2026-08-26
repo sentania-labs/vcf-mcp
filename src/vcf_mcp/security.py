@@ -7,6 +7,7 @@ mode 0600, then reused on every later process start.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import stat
@@ -17,6 +18,10 @@ from pathlib import Path
 DEFAULT_SESSION_SECRET_PATH = Path("/keys/session_secret")
 DEFAULT_AUDIT_DIGEST_KEY_PATH = Path("/keys/audit_digest_key")
 MINIMUM_SESSION_SECRET_BYTES = 32
+PRIVATE_FILE_MODE = 0o600
+GROUP_OR_OTHER_ACCESS = 0o077
+OTHER_ACCESS = 0o007
+LOGGER = logging.getLogger(__name__)
 
 
 class SecretStoreUnavailable(RuntimeError):
@@ -108,7 +113,7 @@ def read_private_text(path: Path) -> str:
 
 
 def validate_private_file(path: Path) -> os.stat_result:
-    """Require a regular, current-user-owned file with mode exactly 0600."""
+    """Require an owned regular file with no access outside its service group."""
 
     try:
         details = path.stat(follow_symlinks=False)
@@ -116,12 +121,71 @@ def validate_private_file(path: Path) -> os.stat_result:
         raise SecretStoreUnavailable(f"cannot stat private file {path}") from exc
     if not stat.S_ISREG(details.st_mode):
         raise SecretStoreUnavailable(f"private path is not a regular file: {path}")
-    if stat.S_IMODE(details.st_mode) != 0o600:
-        raise SecretStoreUnavailable(f"private file must have mode 0600: {path}")
     if details.st_uid != os.geteuid():
         raise SecretStoreUnavailable(
-            f"private file must be owned by the service user: {path}"
+            f"private file {path} is owned by uid {details.st_uid}, but the service"
+            f" runs as uid {os.geteuid()}; set ownership to uid {os.geteuid()}"
         )
+
+    mode = stat.S_IMODE(details.st_mode)
+    if mode & GROUP_OR_OTHER_ACCESS:
+        try:
+            os.chmod(path, PRIVATE_FILE_MODE, follow_symlinks=False)
+        except OSError as exc:
+            if mode & OTHER_ACCESS:
+                raise SecretStoreUnavailable(
+                    f"private file {path} has mode {mode:04o}, which grants access"
+                    " to users outside the service group, and automatic correction"
+                    f" to 0600 failed ({exc}); set mode to 0600 or remove all"
+                    " 'other' permissions"
+                ) from exc
+            service_gids = {os.getegid(), *os.getgroups()}
+            if details.st_gid not in service_gids:
+                raise SecretStoreUnavailable(
+                    f"private file {path} has mode {mode:04o} and gid"
+                    f" {details.st_gid}, but the service belongs to gids"
+                    f" {sorted(service_gids)}; set the file group to a service"
+                    " group or set mode to 0600"
+                ) from exc
+            LOGGER.warning(
+                "private file %s has mode %04o and could not be tightened to 0600"
+                " (%s); continuing because only service-owner and group access is"
+                " present",
+                path,
+                mode,
+                exc,
+            )
+        else:
+            try:
+                details = path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise SecretStoreUnavailable(
+                    f"cannot verify corrected private file {path}; check the"
+                    " mounted volume and file permissions"
+                ) from exc
+            corrected_mode = stat.S_IMODE(details.st_mode)
+            if not stat.S_ISREG(details.st_mode):
+                raise SecretStoreUnavailable(
+                    f"corrected private path is not a regular file: {path}; restore"
+                    " it as a regular file owned by the service user with mode 0600"
+                )
+            if details.st_uid != os.geteuid():
+                raise SecretStoreUnavailable(
+                    f"corrected private file {path} is owned by uid {details.st_uid},"
+                    f" but the service runs as uid {os.geteuid()}; set ownership to"
+                    f" uid {os.geteuid()} and mode to 0600"
+                )
+            if corrected_mode != PRIVATE_FILE_MODE:
+                raise SecretStoreUnavailable(
+                    f"private file {path} still has mode {corrected_mode:04o} after"
+                    " automatic correction reported success; set mode to 0600 and"
+                    " verify the mounted volume applies permission changes"
+                )
+            LOGGER.warning(
+                "private file %s had mode %04o and was corrected to 0600",
+                path,
+                mode,
+            )
     return details
 
 

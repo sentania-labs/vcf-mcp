@@ -158,6 +158,9 @@ class ProductionAppTests(unittest.TestCase):
         self.assertIs(body["ready"], False)
         self.assertIs(body["audit_writable"], False)
         self.assertIsNone(body["unreconciled_outcome_unknown_count"])
+        audit_error = body["startup_errors"]["audit"]
+        self.assertIn(str(Path(environment["AUDIT_DB_PATH"])), audit_error)
+        self.assertIn("could not be opened", audit_error)
 
     def test_a_missing_session_secret_is_generated_and_persisted(self) -> None:
         environment = self.environment()
@@ -176,6 +179,86 @@ class ProductionAppTests(unittest.TestCase):
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(first_health.status_code, 200)
         self.assertEqual(second_health.status_code, 200)
+
+    def test_every_generated_private_file_has_mode_0600(self) -> None:
+        environment = self.environment()
+        with mock.patch.dict(os.environ, environment, clear=True):
+            create_production_app()
+
+        for setting in (
+            "SESSION_SECRET_PATH",
+            "AUDIT_DIGEST_KEY_PATH",
+            "CREDENTIAL_KEYRING_PATH",
+        ):
+            path = Path(environment[setting])
+            self.assertTrue(path.is_file(), setting)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600, setting)
+
+    def test_private_file_refusal_is_logged_and_reported_by_health(self) -> None:
+        environment = self.environment()
+        path = Path(environment["SESSION_SECRET_PATH"])
+        path.parent.mkdir(parents=True)
+        path.write_text("synthetic-session-secret-with-more-than-32-bytes")
+        path.chmod(0o604)
+        real_chmod = os.chmod
+
+        def refuse_session_secret(target, mode, *args, **kwargs):
+            if not isinstance(target, int) and Path(target) == path:
+                raise PermissionError("read-only mount")
+            return real_chmod(target, mode, *args, **kwargs)
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch(
+                "vcf_mcp.security.os.chmod", side_effect=refuse_session_secret
+            ),
+            self.assertLogs("vcf_mcp.main", level="ERROR") as captured,
+        ):
+            app = create_production_app()
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 503)
+        reason = response.json()["startup_errors"]["session_secret"]
+        for expected in (
+            str(path),
+            "mode 0604",
+            "outside the service group",
+            "set mode to 0600",
+        ):
+            self.assertIn(expected, reason)
+            self.assertIn(expected, "\n".join(captured.output))
+
+    def test_distinct_configuration_startup_failures_are_retained(self) -> None:
+        environment = self.environment()
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch(
+                "vcf_mcp.main.load_backend_packs",
+                side_effect=RuntimeError("backend pack failure"),
+            ),
+            mock.patch(
+                "vcf_mcp.main.load_catalog",
+                side_effect=RuntimeError("skills catalog failure"),
+            ),
+        ):
+            app = create_production_app()
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 503)
+        errors = response.json()["startup_errors"]
+        self.assertEqual(
+            errors["backend_packs"],
+            "backend packs could not be loaded; starting degraded: backend pack"
+            " failure",
+        )
+        self.assertEqual(
+            errors["skills_catalog"],
+            f"skills catalog at {environment['SKILLS_PATH']} could not be loaded;"
+            " starting degraded: skills catalog failure",
+        )
 
     def test_an_unwritable_session_secret_path_reports_503(self) -> None:
         blocker = self.root / "secret-blocker"

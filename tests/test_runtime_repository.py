@@ -757,7 +757,7 @@ async def test_bootstrap_cleanup_retries_after_unlink_failure(
 
 
 @pytest.mark.asyncio
-async def test_unsafe_bootstrap_password_file_is_refused(
+async def test_permissive_bootstrap_password_file_is_corrected_and_consumed(
     repository: RuntimeRepository,
 ) -> None:
     path = repository.bootstrap_password_path
@@ -765,8 +765,9 @@ async def test_unsafe_bootstrap_password_file_is_refused(
     path.write_text("synthetic-bootstrap-password")
     path.chmod(0o644)
 
-    assert await repository.initialize_admin_from_bootstrap_file() is False
-    assert await repository.has_admin() is False
+    assert await repository.initialize_admin_from_bootstrap_file() is True
+    assert await repository.has_admin() is True
+    assert not path.exists()
 
 
 @pytest.mark.asyncio
