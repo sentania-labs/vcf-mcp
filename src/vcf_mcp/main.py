@@ -164,7 +164,7 @@ def create_production_app(
     except Exception as exc:
         _record_startup_error(
             startup_errors,
-            "configuration",
+            "backend_packs",
             "backend packs could not be loaded; starting degraded",
             exc,
         )
@@ -187,7 +187,7 @@ def create_production_app(
     except Exception as exc:
         _record_startup_error(
             startup_errors,
-            "configuration",
+            "runtime_configuration",
             "runtime configuration store could not be opened; starting degraded",
             exc,
         )
@@ -239,7 +239,7 @@ def create_production_app(
     except Exception as exc:
         _record_startup_error(
             startup_errors,
-            "configuration",
+            "skills_catalog",
             f"skills catalog at {skills_path} could not be loaded; starting degraded",
             exc,
         )

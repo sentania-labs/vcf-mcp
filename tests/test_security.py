@@ -52,6 +52,22 @@ def test_group_access_is_accepted_and_logged_when_chmod_fails(
     assert "only service-owner and group access is present" in caplog.text
 
 
+def test_successful_no_op_chmod_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "session_secret"
+    _private_file(path, 0o604)
+
+    with (
+        mock.patch("vcf_mcp.security.os.chmod"),
+        pytest.raises(SecretStoreUnavailable) as failure,
+    ):
+        validate_private_file(path)
+
+    message = str(failure.value)
+    assert str(path) in message
+    assert "still has mode 0604" in message
+    assert "set mode to 0600" in message
+
+
 def test_other_access_is_refused_when_chmod_fails(tmp_path: Path) -> None:
     path = tmp_path / "audit_digest_key"
     _private_file(path, 0o604)

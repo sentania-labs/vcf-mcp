@@ -148,11 +148,6 @@ def validate_private_file(path: Path) -> os.stat_result:
                 exc,
             )
         else:
-            LOGGER.warning(
-                "private file %s had mode %04o and was corrected to 0600",
-                path,
-                mode,
-            )
             try:
                 details = path.stat(follow_symlinks=False)
             except OSError as exc:
@@ -160,6 +155,29 @@ def validate_private_file(path: Path) -> os.stat_result:
                     f"cannot verify corrected private file {path}; check the"
                     " mounted volume and file permissions"
                 ) from exc
+            corrected_mode = stat.S_IMODE(details.st_mode)
+            if not stat.S_ISREG(details.st_mode):
+                raise SecretStoreUnavailable(
+                    f"corrected private path is not a regular file: {path}; restore"
+                    " it as a regular file owned by the service user with mode 0600"
+                )
+            if details.st_uid != os.geteuid():
+                raise SecretStoreUnavailable(
+                    f"corrected private file {path} is owned by uid {details.st_uid},"
+                    f" but the service runs as uid {os.geteuid()}; set ownership to"
+                    f" uid {os.geteuid()} and mode to 0600"
+                )
+            if corrected_mode != PRIVATE_FILE_MODE:
+                raise SecretStoreUnavailable(
+                    f"private file {path} still has mode {corrected_mode:04o} after"
+                    " automatic correction reported success; set mode to 0600 and"
+                    " verify the mounted volume applies permission changes"
+                )
+            LOGGER.warning(
+                "private file %s had mode %04o and was corrected to 0600",
+                path,
+                mode,
+            )
     return details
 
 

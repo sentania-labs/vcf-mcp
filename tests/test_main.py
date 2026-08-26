@@ -226,6 +226,29 @@ class ProductionAppTests(unittest.TestCase):
             self.assertIn(expected, reason)
             self.assertIn(expected, "\n".join(captured.output))
 
+    def test_distinct_configuration_startup_failures_are_retained(self) -> None:
+        environment = self.environment()
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch(
+                "vcf_mcp.main.load_backend_packs",
+                side_effect=RuntimeError("backend pack failure"),
+            ),
+            mock.patch(
+                "vcf_mcp.main.load_catalog",
+                side_effect=RuntimeError("skills catalog failure"),
+            ),
+        ):
+            app = create_production_app()
+            with TestClient(app) as client:
+                response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 503)
+        errors = response.json()["startup_errors"]
+        self.assertEqual(errors["backend_packs"], "backend pack failure")
+        self.assertEqual(errors["skills_catalog"], "skills catalog failure")
+
     def test_an_unwritable_session_secret_path_reports_503(self) -> None:
         blocker = self.root / "secret-blocker"
         blocker.write_text("not a directory")
