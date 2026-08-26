@@ -48,6 +48,11 @@ reachable, but their complete cause chain is recorded in startup logs and the
 This permits removal of the initContainer permission workaround tracked in
 `sentania-labs/lab-deployment#23` after the fixed appliance is deployed.
 
+This record supersedes only the exact-`0600` startup refusal stated for the
+admin bootstrap file in record 014. Its creation mode remains `0600`, while an
+existing service-owned file follows the correction and service-group fallback
+defined here.
+
 ## Dissent
 
 None. The implementation follows a direct principal instruction.

@@ -151,6 +151,11 @@ Check readiness with `curl --fail http://localhost:8000/healthz`. A ready
 response is HTTP 200 and reports `audit_writable`, `configuration_ready`,
 `session_secret_persistent`, and `mcp_ready` as true.
 
+An HTTP 503 response includes `startup_errors` when startup could not load a
+required store, key, secret, or catalog. Each entry reports the concrete cause
+and affected path so volume ownership and permissions can be distinguished
+from database or configuration failures.
+
 ## First admin sign-in and backend wiring
 
 Open `http://localhost:8000/admin/login`. The first-run interface requires an
