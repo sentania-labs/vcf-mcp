@@ -46,7 +46,23 @@ DASHBOARD_TABS = frozenset(
 
 
 def _dashboard_url(tab: str) -> str:
-    return f"/admin?tab={tab}"
+    selected_tab = tab if tab in DASHBOARD_TABS else "overview"
+    return f"/admin?tab={selected_tab}"
+
+
+def _requested_dashboard_tab(request: Request) -> str:
+    return request.query_params.get("tab", "overview")
+
+
+def _validated_dashboard_destination(value: object) -> str:
+    if not isinstance(value, str):
+        return _dashboard_url("overview")
+    prefix = "/admin?tab="
+    if value.startswith(prefix):
+        return _dashboard_url(value.removeprefix(prefix))
+    if value == "/admin":
+        return value
+    return _dashboard_url("overview")
 
 
 class RepositoryUnavailable(RuntimeError):
@@ -88,7 +104,7 @@ def _degraded_to_503(endpoint):
     return wrapper
 
 
-def _recent_reauth_post(endpoint):
+def _recent_reauth_post(endpoint, *, tab: str):
     """Apply authentication, CSRF, and recent reauth before a sensitive POST."""
 
     @functools.wraps(endpoint)
@@ -104,7 +120,7 @@ def _recent_reauth_post(endpoint):
                 {"message": "CSRF verification failed."},
                 status_code=403,
             )
-        reauth = auth.require_recent_reauth(request)
+        reauth = auth.require_recent_reauth(request, next_path=_dashboard_url(tab))
         if reauth:
             return reauth
         return await endpoint(request)
@@ -113,19 +129,28 @@ def _recent_reauth_post(endpoint):
 
 
 async def require_auth(
-    request: Request,
+    request: Request, *, tab: str | None = None
 ) -> RedirectResponse | None:
     timeout = auth.enforce_idle_timeout(request)
     if timeout:
+        if tab is not None:
+            selected_tab = _dashboard_url(tab).removeprefix("/admin?tab=")
+            return RedirectResponse(
+                url=f"/admin/login?tab={selected_tab}", status_code=303
+            )
         return timeout
     if "user_id" not in request.session:
-        return RedirectResponse(url="/admin/login", status_code=303)
+        login_url = "/admin/login"
+        if tab is not None:
+            login_url = f"{login_url}?tab={_dashboard_url(tab).removeprefix('/admin?tab=')}"
+        return RedirectResponse(url=login_url, status_code=303)
     return None
 
 
 async def get_login(request: Request):
+    tab = _requested_dashboard_tab(request)
     if "user_id" in request.session:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url=_dashboard_url(tab), status_code=303)
     repository = _repository(request)
     return templates.TemplateResponse(
         request,
@@ -133,6 +158,7 @@ async def get_login(request: Request):
         {
             "bootstrap_required": not await repository.has_admin(),
             "error": None,
+            "tab": tab if tab in DASHBOARD_TABS else "overview",
         },
     )
 
@@ -142,6 +168,8 @@ async def post_login(request: Request):
     form = await request.form()
     username = str(form.get("username", ""))
     password = str(form.get("password", ""))
+    tab = str(form.get("tab", "overview"))
+    tab = tab if tab in DASHBOARD_TABS else "overview"
     await repository.initialize_admin_from_bootstrap_file()
     if not await repository.has_admin():
         confirmation = str(form.get("password_confirmation", ""))
@@ -156,6 +184,7 @@ async def post_login(request: Request):
                 {
                     "bootstrap_required": True,
                     "error": "Use the admin username and enter matching passwords.",
+                    "tab": tab,
                 },
                 status_code=400,
             )
@@ -165,7 +194,7 @@ async def post_login(request: Request):
             return templates.TemplateResponse(
                 request,
                 "login.html",
-                {"bootstrap_required": True, "error": str(exc)},
+                {"bootstrap_required": True, "error": str(exc), "tab": tab},
                 status_code=400,
             )
     valid = secrets.compare_digest(
@@ -178,15 +207,16 @@ async def post_login(request: Request):
             {
                 "bootstrap_required": not await repository.has_admin(),
                 "error": "Invalid credentials or bootstrap is not complete.",
+                "tab": tab,
             },
             status_code=401,
         )
     auth.initialize_session(request, "admin")
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url(tab), status_code=303)
 
 
 async def get_dashboard(request: Request):
-    check = await require_auth(request)
+    check = await require_auth(request, tab=_requested_dashboard_tab(request))
     if check:
         return check
     return await _dashboard_response(request)
@@ -706,10 +736,10 @@ async def post_reauth(request: Request):
             },
             status_code=401,
         )
-    destination = request.session.pop("next", "/admin")
+    destination = _validated_dashboard_destination(
+        request.session.pop("next", "/admin")
+    )
     auth.refresh_reauth(request)
-    if not isinstance(destination, str) or not destination.startswith("/admin"):
-        destination = "/admin"
     return RedirectResponse(url=destination, status_code=303)
 
 
@@ -839,57 +869,71 @@ admin_routes = [
     ),
     Route(
         "/admin/targets",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_target_register)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_target_register, tab="targets")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/targets/{target_id}",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_target_update)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_target_update, tab="targets")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/keys",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_key_create)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_key_create, tab="api-keys")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/keys/revoke",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_key_revoke)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_key_revoke, tab="api-keys")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/authorization-mode",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_authorization_mode)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_authorization_mode, tab="overview")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/targets/{target_id}/auth-unlock",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_auth_unlock)),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_auth_unlock, tab="targets")),
         methods=["POST"],
     ),
     Route(
         "/admin/credential-rotation",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_credential_rotation)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_credential_rotation, tab="maintenance")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/install",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_install)),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_install, tab="packs")),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/rollback",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_rollback)),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_rollback, tab="packs")),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/policy",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_policy)),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_policy, tab="packs")),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/trust-root/refresh",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_trust_refresh)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_pack_trust_refresh, tab="packs")
+        ),
         methods=["POST"],
     ),
     Route(
@@ -899,17 +943,19 @@ admin_routes = [
     ),
     Route(
         "/admin/packs/registry/install",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_registry_install)),
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_pack_registry_install, tab="packs")
+        ),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/confirm",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_confirm)),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_confirm, tab="packs")),
         methods=["POST"],
     ),
     Route(
         "/admin/restart",
-        endpoint=_degraded_to_503(_recent_reauth_post(post_restart)),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_restart, tab="maintenance")),
         methods=["POST"],
     ),
 ]

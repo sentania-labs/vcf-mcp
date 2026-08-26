@@ -184,15 +184,21 @@ def test_tab_urls_reload_and_remain_available_during_degraded_start(
     }
     try:
         with TestClient(app, base_url="https://testserver") as client:
+            detour = client.get("/admin?tab=targets", follow_redirects=False)
+            assert detour.headers["location"] == "/admin/login?tab=targets"
+            login_page = client.get(detour.headers["location"])
+            assert 'name="tab" value="targets"' in login_page.text
             login = client.post(
                 "/admin/login",
                 data={
                     "username": "admin",
                     "password": "synthetic-admin-password",
+                    "tab": "targets",
                 },
                 follow_redirects=False,
             )
             assert login.status_code == 303
+            assert login.headers["location"] == "/admin?tab=targets"
             assert client.get("/healthz").status_code == 503
 
             for tab, heading in tabs.items():
@@ -367,11 +373,12 @@ def test_stale_reauth_reports_unsaved_target_and_protects_other_posts(
                     follow_redirects=False,
                 )
                 assert confirmed.status_code == 303
-                assert confirmed.headers["location"] == "/admin"
+                assert confirmed.headers["location"] == "/admin?tab=targets"
 
                 returned = client.get(confirmed.headers["location"])
                 assert returned.status_code == 200
                 assert auth.DISCARDED_POST_NOTICE in returned.text
+                assert 'href="/admin?tab=targets" aria-current="page"' in returned.text
 
                 stored_bytes = b"".join(
                     path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()

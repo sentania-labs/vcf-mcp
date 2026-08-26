@@ -99,13 +99,15 @@ def refresh_reauth(request: Request) -> None:
     request.session["last_active"] = now
 
 
-def require_recent_reauth(request: Request) -> RedirectResponse | None:
+def require_recent_reauth(
+    request: Request, *, next_path: str = "/admin"
+) -> RedirectResponse | None:
     if not is_recent_reauth(request):
         # Store only a local path, and only for safe methods. A full URL
         # would turn this into an open redirect if proxy headers or a future
         # caller supplied another host, and a POST-only path would land the
         # post-reauth GET redirect on a 405.
-        path = "/admin"
+        path = next_path if next_path.startswith("/admin") else "/admin"
         if request.scope.get("method", "").upper() in {"GET", "HEAD"}:
             candidate = request.scope.get("path")
             if not isinstance(candidate, str):
