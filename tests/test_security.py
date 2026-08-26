@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
 from pathlib import Path
 from unittest import mock
 
@@ -114,6 +115,52 @@ def test_successful_no_op_chmod_is_refused(tmp_path: Path) -> None:
     assert str(path) in message
     assert "still has mode 0604" in message
     assert "set mode to 0600" in message
+
+
+def test_chmod_revalidation_refuses_changed_file_type(tmp_path: Path) -> None:
+    path = tmp_path / "session_secret"
+    _private_file(path, 0o604)
+    initial = path.stat()
+    changed = mock.Mock(
+        st_mode=stat.S_IFDIR | 0o600,
+        st_uid=initial.st_uid,
+        st_gid=initial.st_gid,
+    )
+
+    with (
+        mock.patch.object(Path, "stat", side_effect=[initial, changed]),
+        pytest.raises(SecretStoreUnavailable) as failure,
+    ):
+        validate_private_file(path)
+
+    message = str(failure.value)
+    assert str(path) in message
+    assert "not a regular file" in message
+    assert "mode 0600" in message
+
+
+def test_chmod_revalidation_refuses_changed_ownership(tmp_path: Path) -> None:
+    path = tmp_path / "session_secret"
+    _private_file(path, 0o604)
+    initial = path.stat()
+    changed_uid = initial.st_uid + 1
+    changed = mock.Mock(
+        st_mode=stat.S_IFREG | 0o600,
+        st_uid=changed_uid,
+        st_gid=initial.st_gid,
+    )
+
+    with (
+        mock.patch.object(Path, "stat", side_effect=[initial, changed]),
+        pytest.raises(SecretStoreUnavailable) as failure,
+    ):
+        validate_private_file(path)
+
+    message = str(failure.value)
+    assert str(path) in message
+    assert f"owned by uid {changed_uid}" in message
+    assert f"set ownership to uid {os.geteuid()}" in message
+    assert "mode to 0600" in message
 
 
 def test_other_access_is_refused_when_chmod_fails(tmp_path: Path) -> None:

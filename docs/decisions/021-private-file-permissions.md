@@ -37,8 +37,11 @@ When an owned file has group or other permissions, startup first attempts to
 change it to `0600`. Successful correction is logged with the path and prior
 mode. If correction fails, any `other` permission causes refusal with the path,
 mode, cause, and remediation. Group permissions alone are accepted and logged
-because they represent the service's Kubernetes `fsGroup` boundary rather than
-access outside that boundary.
+only when the file's group is the process effective group or one of its
+supplementary groups. This verifies that group access represents the service's
+Kubernetes `fsGroup` boundary rather than access outside that boundary. An
+unrelated file group is refused with the file gid, the service gids, and
+remediation.
 
 New session secrets, audit digest keys, and credential keyrings continue to be
 written atomically with mode `0600`. Startup failures remain degraded and
