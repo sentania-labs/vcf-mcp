@@ -20,6 +20,10 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v5
+        env:
+          # setup-python bootstraps pip while installing an uncached patch
+          # release. The lab runners can have slow paths to files.pythonhosted.org.
+          PIP_DEFAULT_TIMEOUT: "300"
         with:
           python-version: "3.12"
           # Do not enable setup-python's pip cache on this heterogeneous
