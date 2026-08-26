@@ -12,6 +12,12 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 IDLE_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
 RECENT_REAUTH_WINDOW_SECONDS = 5 * 60  # 5 minutes
+DISCARDED_POST_NOTICE_SECONDS = 5 * 60  # 5 minutes
+DISCARDED_POST_NOTICE = (
+    "Your submitted change was not saved because recent password confirmation "
+    "was required. Confirm your password, then submit the change again."
+)
+_DISCARDED_POST_NOTICE_KEY = "discarded_post_notice"
 
 
 def hash_password(password: str) -> str:
@@ -109,9 +115,34 @@ def require_recent_reauth(request: Request) -> RedirectResponse | None:
                 candidate = "/" + candidate.split("/", 3)[-1]
             if candidate.startswith("/"):
                 path = candidate
+        else:
+            request.session[_DISCARDED_POST_NOTICE_KEY] = {
+                "message": DISCARDED_POST_NOTICE,
+                "expires_at": time.time() + DISCARDED_POST_NOTICE_SECONDS,
+            }
         request.session["next"] = path
         return RedirectResponse(url="/admin/reauth", status_code=303)
     return None
+
+
+def discarded_post_notice(request: Request, *, consume: bool = False) -> str | None:
+    """Return the short-lived notice for a POST discarded at the reauth gate."""
+    value = request.session.get(_DISCARDED_POST_NOTICE_KEY)
+    if not isinstance(value, dict):
+        request.session.pop(_DISCARDED_POST_NOTICE_KEY, None)
+        return None
+    message = value.get("message")
+    expires_at = value.get("expires_at")
+    if (
+        not isinstance(message, str)
+        or not isinstance(expires_at, (int, float))
+        or time.time() >= expires_at
+    ):
+        request.session.pop(_DISCARDED_POST_NOTICE_KEY, None)
+        return None
+    if consume:
+        request.session.pop(_DISCARDED_POST_NOTICE_KEY, None)
+    return message
 
 
 def verify_csrf(request: Request, submitted_token: str) -> bool:

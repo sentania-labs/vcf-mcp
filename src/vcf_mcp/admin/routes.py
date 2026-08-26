@@ -80,6 +80,30 @@ def _degraded_to_503(endpoint):
     return wrapper
 
 
+def _recent_reauth_post(endpoint):
+    """Apply authentication, CSRF, and recent reauth before a sensitive POST."""
+
+    @functools.wraps(endpoint)
+    async def wrapper(request: Request):
+        check = await require_auth(request)
+        if check:
+            return check
+        form = await request.form()
+        if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                {"message": "CSRF verification failed."},
+                status_code=403,
+            )
+        reauth = auth.require_recent_reauth(request)
+        if reauth:
+            return reauth
+        return await endpoint(request)
+
+    return wrapper
+
+
 async def require_auth(
     request: Request,
 ) -> RedirectResponse | None:
@@ -595,7 +619,11 @@ async def get_reauth(request: Request):
     return templates.TemplateResponse(
         request,
         "reauth.html",
-        {"csrf_token": request.session["csrf_token"], "error": None},
+        {
+            "csrf_token": request.session["csrf_token"],
+            "error": None,
+            "notice": auth.discarded_post_notice(request),
+        },
     )
 
 
@@ -619,6 +647,7 @@ async def post_reauth(request: Request):
             {
                 "csrf_token": request.session["csrf_token"],
                 "error": "Invalid password.",
+                "notice": auth.discarded_post_notice(request),
             },
             status_code=401,
         )
@@ -674,6 +703,8 @@ async def _dashboard_response(
     registry_entries: tuple[dict[str, object], ...] = (),
     registry_skipped: tuple[dict[str, str], ...] = (),
 ):
+    discarded_notice = auth.discarded_post_notice(request, consume=True)
+    error = error or discarded_notice
     repository = _repository(request)
     surfaces = getattr(request.app.state, "mcp_surfaces", None)
     wired_endpoints = (
@@ -748,53 +779,57 @@ admin_routes = [
     ),
     Route(
         "/admin/targets",
-        endpoint=_degraded_to_503(post_target_register),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_target_register)),
         methods=["POST"],
     ),
     Route(
         "/admin/targets/{target_id}",
-        endpoint=_degraded_to_503(post_target_update),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_target_update)),
         methods=["POST"],
     ),
-    Route("/admin/keys", endpoint=_degraded_to_503(post_key_create), methods=["POST"]),
+    Route(
+        "/admin/keys",
+        endpoint=_degraded_to_503(_recent_reauth_post(post_key_create)),
+        methods=["POST"],
+    ),
     Route(
         "/admin/keys/revoke",
-        endpoint=_degraded_to_503(post_key_revoke),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_key_revoke)),
         methods=["POST"],
     ),
     Route(
         "/admin/authorization-mode",
-        endpoint=_degraded_to_503(post_authorization_mode),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_authorization_mode)),
         methods=["POST"],
     ),
     Route(
         "/admin/targets/{target_id}/auth-unlock",
-        endpoint=_degraded_to_503(post_auth_unlock),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_auth_unlock)),
         methods=["POST"],
     ),
     Route(
         "/admin/credential-rotation",
-        endpoint=_degraded_to_503(post_credential_rotation),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_credential_rotation)),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/install",
-        endpoint=_degraded_to_503(post_pack_install),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_install)),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/rollback",
-        endpoint=_degraded_to_503(post_pack_rollback),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_rollback)),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/policy",
-        endpoint=_degraded_to_503(post_pack_policy),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_policy)),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/trust-root/refresh",
-        endpoint=_degraded_to_503(post_pack_trust_refresh),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_trust_refresh)),
         methods=["POST"],
     ),
     Route(
@@ -804,17 +839,17 @@ admin_routes = [
     ),
     Route(
         "/admin/packs/registry/install",
-        endpoint=_degraded_to_503(post_pack_registry_install),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_registry_install)),
         methods=["POST"],
     ),
     Route(
         "/admin/packs/confirm",
-        endpoint=_degraded_to_503(post_pack_confirm),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_pack_confirm)),
         methods=["POST"],
     ),
     Route(
         "/admin/restart",
-        endpoint=_degraded_to_503(post_restart),
+        endpoint=_degraded_to_503(_recent_reauth_post(post_restart)),
         methods=["POST"],
     ),
 ]
