@@ -886,6 +886,7 @@ async def _dashboard_response(
     if selected_tab not in DASHBOARD_TABS:
         selected_tab = "overview"
     targets = await repository.list()
+    global_ca_fingerprints = await repository.get_global_root_ca_fingerprints()
     target_trust = {
         target.id: await repository.get_effective_trust(target.id)
         for target in targets
@@ -895,12 +896,12 @@ async def _dashboard_response(
         "dashboard.html",
         {
             "targets": targets,
-            "removal_target_digest": global_ca_target_digest(targets),
+            "removal_target_digest": global_ca_target_digest(
+                targets, global_ca_fingerprints
+            ),
             "target_trust": target_trust,
             "global_root_ca": await repository.get_global_root_ca(),
-            "global_ca_fingerprints": (
-                await repository.get_global_root_ca_fingerprints()
-            ),
+            "global_ca_fingerprints": global_ca_fingerprints,
             "api_keys": await repository.list_api_keys(),
             "authorization_mode": await repository.authorization_mode(),
             "rotation_status": await repository.rotation_status(),

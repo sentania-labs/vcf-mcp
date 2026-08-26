@@ -60,6 +60,60 @@ def test_composite_invalidator_attempts_every_pool() -> None:
     assert [str(error) for error in raised.value.exceptions] == ["first", "third"]
 
 
+@pytest.mark.asyncio
+async def test_pool_invalidator_settles_every_client_after_failures() -> None:
+    calls: list[str] = []
+
+    class Client:
+        def __init__(self, name: str, *, cancel_fails=False, close_fails=False):
+            self.name = name
+            self.cancel_fails = cancel_fails
+            self.close_fails = close_fails
+
+        def mark_closed(self) -> None:
+            calls.append(f"{self.name}:marked")
+
+        async def cancel(self) -> int:
+            calls.append(f"{self.name}:cancelled")
+            if self.cancel_fails:
+                raise RuntimeError(f"{self.name}:cancel")
+            return 0
+
+        async def aclose(self) -> None:
+            calls.append(f"{self.name}:closed")
+            if self.close_fails:
+                raise RuntimeError(f"{self.name}:close")
+
+    pool = object.__new__(BackendClientPool)
+    pool._lock = asyncio.Lock()
+    pool._clients = {
+        "first": Client("first", cancel_fails=True),
+        "second": Client("second", close_fails=True),
+        "third": Client("third"),
+    }
+    pool._trust = {name: (True, None) for name in pool._clients}
+    pool._confirmed_auth_generation = {name: 1 for name in pool._clients}
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await pool.invalidate_all(mode=InvalidationMode.CANCEL)
+
+    assert calls == [
+        "first:marked",
+        "second:marked",
+        "third:marked",
+        "first:cancelled",
+        "first:closed",
+        "second:cancelled",
+        "second:closed",
+        "third:cancelled",
+        "third:closed",
+    ]
+    assert [str(error) for error in raised.value.exceptions] == [
+        "first:cancel",
+        "second:close",
+    ]
+
+
 def synthetic_ca_pem() -> str:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "fixture root")])

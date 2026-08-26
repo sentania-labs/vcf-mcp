@@ -311,12 +311,21 @@ class BackendClientPool:
             self._confirmed_auth_generation.clear()
             for client in clients:
                 client.mark_closed()
+        failures: list[Exception] = []
         for client in clients:
-            if mode is InvalidationMode.CANCEL:
-                await client.cancel()
-            else:
-                await client.drain()
-            await client.aclose()
+            try:
+                if mode is InvalidationMode.CANCEL:
+                    await client.cancel()
+                else:
+                    await client.drain()
+            except Exception as exc:
+                failures.append(exc)
+            try:
+                await client.aclose()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("backend client invalidation failures", failures)
 
 
 class CompositeInvalidator:

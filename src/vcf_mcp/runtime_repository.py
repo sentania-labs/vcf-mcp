@@ -66,12 +66,18 @@ _FQDN = re.compile(
 )
 
 
-def global_ca_target_digest(targets: tuple[TargetRecord, ...]) -> str:
+def global_ca_target_digest(
+    targets: tuple[TargetRecord, ...], certificate_fingerprints: tuple[str, ...]
+) -> str:
     displayed = sorted(
         (str(target.id), target.name, target.fqdn, target.has_custom_ca)
         for target in targets
     )
-    encoded = json.dumps(displayed, ensure_ascii=True, separators=(",", ":"))
+    encoded = json.dumps(
+        (displayed, certificate_fingerprints),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -1069,7 +1075,10 @@ class RuntimeRepository:
             ).fetchall()
             targets = tuple(self._target_from_row(row) for row in rows)
             if not secrets.compare_digest(
-                expected_target_digest, global_ca_target_digest(targets)
+                expected_target_digest,
+                global_ca_target_digest(
+                    targets, _certificate_fingerprints(str(previous[0]))
+                ),
             ):
                 raise GlobalRootCaTargetSetChanged(
                     "the affected target set changed since this page loaded"

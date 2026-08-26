@@ -822,6 +822,59 @@ def test_global_ca_removal_rejects_changed_target_set(tmp_path: Path) -> None:
         audit.close()
 
 
+def test_global_ca_removal_rejects_replaced_certificate(tmp_path: Path) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    asyncio.run(runtime.set_global_root_ca(synthetic_ca_pem()))
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-admin-password",
+                },
+            )
+            page = client.get("/admin?tab=targets")
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+            digest = re.search(
+                r'name="affected_targets_digest" value="([a-f0-9]+)"', page.text
+            )
+            assert csrf is not None and digest is not None
+            replacement = synthetic_ca_pem()
+            asyncio.run(runtime.set_global_root_ca(replacement))
+
+            refused = client.post(
+                "/admin/global-root-ca/remove",
+                data={
+                    "csrf_token": csrf.group(1),
+                    "confirm_remove": "on",
+                    "affected_targets_digest": digest.group(1),
+                },
+            )
+
+            assert refused.status_code == 409
+            assert "target set changed since this page loaded" in refused.text
+            assert asyncio.run(runtime.get_global_root_ca()) == replacement
+    finally:
+        runtime.close()
+        audit.close()
+
+
 def test_login_with_non_ascii_username_is_denied(tmp_path: Path) -> None:
     bootstrap = tmp_path / "keys" / "admin_bootstrap_password"
     bootstrap.parent.mkdir(parents=True)
