@@ -67,6 +67,26 @@
     .target-card { margin-bottom: .8rem; }
     .target-card summary { display: flex; align-items: center; gap: .5rem; }
     .compact { margin-top: .8rem; }
+    .tabs {
+      display: flex;
+      gap: .25rem;
+      margin: 1rem 0;
+      overflow-x: auto;
+      border-bottom: 1px solid #c8d2e1;
+    }
+    .tabs a {
+      flex: 0 0 auto;
+      padding: .7rem .9rem;
+      color: #32445f;
+      text-decoration: none;
+      border-bottom: 3px solid transparent;
+    }
+    .tabs a:hover { background: #e8f2ff; }
+    .tabs a[aria-current="page"] {
+      color: #0d568f;
+      font-weight: 700;
+      border-bottom-color: #1768ac;
+    }
   </style>
 </head>
 <body>

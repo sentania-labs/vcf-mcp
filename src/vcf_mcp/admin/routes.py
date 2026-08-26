@@ -40,6 +40,14 @@ from vcf_mcp.runtime_repository import (
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 
+DASHBOARD_TABS = frozenset(
+    {"overview", "targets", "api-keys", "packs", "maintenance", "audit"}
+)
+
+
+def _dashboard_url(tab: str) -> str:
+    return f"/admin?tab={tab}"
+
 
 class RepositoryUnavailable(RuntimeError):
     """The runtime configuration store is degraded or absent."""
@@ -222,9 +230,11 @@ async def post_target_register(request: Request):
             root_ca_pem=root_ca,
         )
     except ValueError as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="targets"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
 
 
 async def post_target_update(request: Request):
@@ -247,7 +257,10 @@ async def post_target_update(request: Request):
     previous = await repository.get(target_id)
     if previous is None:
         return await _dashboard_response(
-            request, error="Target does not exist.", status_code=404
+            request,
+            error="Target does not exist.",
+            status_code=404,
+            active_tab="targets",
         )
     try:
         uploaded_ca = await _uploaded_text(form.get("root_ca"))
@@ -274,9 +287,11 @@ async def post_target_update(request: Request):
         if invalidator is not None:
             await invalidator.invalidate(change, mode=mode)
     except (ValueError, RuntimeError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="targets"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
 
 
 async def post_key_create(request: Request):
@@ -306,7 +321,9 @@ async def post_key_create(request: Request):
             allowed_endpoints=selected_endpoints or None,
         )
     except ValueError as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="api-keys"
+        )
     auth.rotate_session(request)
     return templates.TemplateResponse(
         request,
@@ -333,7 +350,7 @@ async def post_key_revoke(request: Request):
         )
     await _repository(request).revoke_api_key(KeyId(str(form.get("key_id", ""))))
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("api-keys"), status_code=303)
 
 
 async def post_authorization_mode(request: Request):
@@ -356,9 +373,11 @@ async def post_authorization_mode(request: Request):
             AuthorizationMode(str(form.get("authorization_mode", "")))
         )
     except ValueError as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="overview"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("overview"), status_code=303)
 
 
 async def post_auth_unlock(request: Request):
@@ -380,7 +399,7 @@ async def post_auth_unlock(request: Request):
         TargetId(request.path_params["target_id"])
     )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
 
 
 async def post_credential_rotation(request: Request):
@@ -405,7 +424,7 @@ async def post_credential_rotation(request: Request):
         start_new=status is None or status.get("state") == "complete",
     )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("maintenance"), status_code=303)
 
 
 async def post_pack_install(request: Request):
@@ -418,7 +437,10 @@ async def post_pack_install(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     try:
         pack_bytes = await _uploaded_bytes(form.get("pack"), MAX_PACK_BYTES)
@@ -427,7 +449,9 @@ async def post_pack_install(request: Request):
         )
         result = await _pack_manager(request).install_manual(pack_bytes, bundle_bytes)
     except (PackTrustError, ValueError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="packs"
+        )
     auth.rotate_session(request)
     return templates.TemplateResponse(
         request,
@@ -446,16 +470,21 @@ async def post_pack_rollback(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     try:
         await _pack_manager(request).rollback(
             str(form.get("backend", "")), str(form.get("version", ""))
         )
     except (PackTrustError, ValueError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="packs"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("packs"), status_code=303)
 
 
 async def post_pack_policy(request: Request):
@@ -468,16 +497,21 @@ async def post_pack_policy(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     try:
         await _repository(request).set_unsigned_packs_allowed(
             form.get("unsigned_packs_allowed") == "on"
         )
     except ValueError as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="packs"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("packs"), status_code=303)
 
 
 async def post_pack_trust_refresh(request: Request):
@@ -490,14 +524,19 @@ async def post_pack_trust_refresh(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     try:
         await _pack_manager(request).refresh_trust_root()
     except (PackTrustError, httpx.HTTPError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=502)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=502, active_tab="packs"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("packs"), status_code=303)
 
 
 async def post_pack_registry_check(request: Request):
@@ -507,16 +546,22 @@ async def post_pack_registry_check(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     try:
         catalog = await _pack_manager(request).registry_catalog()
     except (PackTrustError, httpx.HTTPError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=502)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=502, active_tab="packs"
+        )
     return await _dashboard_response(
         request,
         registry_entries=catalog.entries,
         registry_skipped=catalog.skipped,
+        active_tab="packs",
     )
 
 
@@ -530,7 +575,10 @@ async def post_pack_registry_install(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     entry_id = str(form.get("entry_id", "")).strip()
     if not entry_id:
@@ -541,7 +589,9 @@ async def post_pack_registry_install(request: Request):
     try:
         result = await _pack_manager(request).install_from_registry(entry_id)
     except (PackTrustError, httpx.HTTPError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=502)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=502, active_tab="packs"
+        )
     auth.rotate_session(request)
     return templates.TemplateResponse(
         request,
@@ -560,16 +610,21 @@ async def post_pack_confirm(request: Request):
     form = await request.form()
     if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
         return templates.TemplateResponse(
-            request, "error.html", {"message": "CSRF verification failed."}, status_code=403
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
         )
     try:
         await _pack_manager(request).install_staged(
             str(form.get("backend", "")), str(form.get("digest", ""))
         )
     except (PackTrustError, ValueError) as exc:
-        return await _dashboard_response(request, error=str(exc), status_code=400)
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="packs"
+        )
     auth.rotate_session(request)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=_dashboard_url("packs"), status_code=303)
 
 
 async def post_restart(request: Request):
@@ -702,6 +757,7 @@ async def _dashboard_response(
     status_code: int = 200,
     registry_entries: tuple[dict[str, object], ...] = (),
     registry_skipped: tuple[dict[str, str], ...] = (),
+    active_tab: str | None = None,
 ):
     discarded_notice = auth.discarded_post_notice(request, consume=True)
     error = error or discarded_notice
@@ -721,6 +777,9 @@ async def _dashboard_response(
         sorted(packs.values(), key=lambda pack: pack.product.casefold())
     )
     pack_manager = getattr(request.app.state, "pack_trust_manager", None)
+    selected_tab = active_tab or request.query_params.get("tab", "overview")
+    if selected_tab not in DASHBOARD_TABS:
+        selected_tab = "overview"
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -759,6 +818,7 @@ async def _dashboard_response(
             "wired_endpoints": wired_endpoints,
             "csrf_token": request.session["csrf_token"],
             "error": error,
+            "active_tab": selected_tab,
         },
         status_code=status_code,
     )

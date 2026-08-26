@@ -89,12 +89,14 @@ def test_bootstrap_login_target_registration_and_key_mint(
 
             dashboard = client.get("/admin")
             assert dashboard.status_code == 200
-            assert ">NSX<" in dashboard.text
-            assert "VCF Log Management" in dashboard.text
-            assert "vSAN Data Protection" in dashboard.text
             assert "/nsx/mcp" in dashboard.text
             assert "/vsan-dp/mcp" in dashboard.text
-            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
+            targets_tab = client.get("/admin?tab=targets")
+            assert targets_tab.status_code == 200
+            assert ">NSX<" in targets_tab.text
+            assert "VCF Log Management" in targets_tab.text
+            assert "vSAN Data Protection" in targets_tab.text
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', targets_tab.text)
             assert csrf is not None
 
             refused = client.post(
@@ -117,12 +119,22 @@ def test_bootstrap_login_target_registration_and_key_mint(
                 follow_redirects=False,
             )
             assert registered.status_code == 303
+            assert registered.headers["location"] == "/admin?tab=targets"
+            returned_to_targets = client.get(registered.headers["location"])
+            assert "Register backend target" in returned_to_targets.text
+            assert (
+                'href="/admin?tab=targets" aria-current="page"'
+                in returned_to_targets.text
+            )
 
-            dashboard = client.get("/admin")
-            assert "Restart appliance now" in dashboard.text
-            assert "Without one, it stays stopped" in dashboard.text
-            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
-            target_id = re.search(r'name="target_id" value="([^"]+)"', dashboard.text)
+            maintenance_tab = client.get("/admin?tab=maintenance")
+            assert "Restart appliance now" in maintenance_tab.text
+            assert "Without one, it stays stopped" in maintenance_tab.text
+            api_keys_tab = client.get("/admin?tab=api-keys")
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', api_keys_tab.text)
+            target_id = re.search(
+                r'name="target_id" value="([^"]+)"', api_keys_tab.text
+            )
             assert csrf is not None and target_id is not None
             created = client.post(
                 "/admin/keys",
@@ -137,6 +149,69 @@ def test_bootstrap_login_target_registration_and_key_mint(
             assert created.headers["cache-control"] == "no-store"
             key = re.search(r"(vok_[a-z0-9]+_[A-Za-z0-9_-]+)", created.text)
             assert key is not None
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_tab_urls_reload_and_remain_available_during_degraded_start(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=False,
+        startup_errors={"mcp": "synthetic degraded start"},
+    )
+
+    tabs = {
+        "overview": "Startup-frozen endpoints",
+        "targets": "Register backend target",
+        "api-keys": "Mint MCP API key",
+        "packs": "Backend pack trust",
+        "maintenance": "Credential key rotation",
+        "audit": "Recent configuration audit",
+    }
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            login = client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-admin-password",
+                },
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            assert client.get("/healthz").status_code == 503
+
+            for tab, heading in tabs.items():
+                url = f"/admin?tab={tab}"
+                first = client.get(url)
+                reloaded = client.get(url)
+                assert first.status_code == 200
+                assert reloaded.status_code == 200
+                assert heading in first.text
+                assert f'href="{url}" aria-current="page"' in reloaded.text
+                for other_heading in tabs.values():
+                    assert (other_heading in first.text) is (other_heading == heading)
+
+            invalid = client.get("/admin?tab=not-a-console-area")
+            assert invalid.status_code == 200
+            assert 'href="/admin?tab=overview" aria-current="page"' in invalid.text
+            full_audit = client.get("/admin/audit")
+            assert full_audit.status_code == 200
+            assert "Recent audit records" in full_audit.text
     finally:
         runtime.close()
         audit.close()
@@ -214,7 +289,7 @@ def test_quarantined_target_dashboard_requires_root_ca_recovery(
                 follow_redirects=False,
             )
             assert login.status_code == 303
-            dashboard = client.get("/admin")
+            dashboard = client.get("/admin?tab=targets")
             assert dashboard.status_code == 200
             assert "replace or remove the stored root CA" in dashboard.text
     finally:
@@ -258,9 +333,7 @@ def test_stale_reauth_reports_unsaved_target_and_protects_other_posts(
                     follow_redirects=False,
                 )
                 dashboard = client.get("/admin")
-                csrf = re.search(
-                    r'name="csrf_token" value="([^"]+)"', dashboard.text
-                )
+                csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
                 assert csrf is not None
 
                 mock_time.return_value += auth.RECENT_REAUTH_WINDOW_SECONDS + 10
@@ -341,8 +414,7 @@ def test_stale_reauth_reports_unsaved_target_and_protects_other_posts(
                 assert other_bounced.status_code == 303
                 assert other_bounced.headers["location"] == "/admin/reauth"
                 assert (
-                    asyncio.run(runtime.authorization_mode())
-                    is AuthorizationMode.LOCAL
+                    asyncio.run(runtime.authorization_mode()) is AuthorizationMode.LOCAL
                 )
 
                 other_reauth_page = client.get("/admin/reauth")
