@@ -13,9 +13,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from starlette.testclient import TestClient
 
+from vcf_mcp.admin import auth
 from vcf_mcp.app import create_app
 from vcf_mcp.audit import SqliteAuditRepository
-from vcf_mcp.contracts import BackendKind, InvalidationMode
+from vcf_mcp.contracts import AuthorizationMode, BackendKind, InvalidationMode
 from vcf_mcp.mcp_server import implemented_scopes
 from vcf_mcp.runtime_repository import RuntimeRepository
 
@@ -221,7 +222,7 @@ def test_quarantined_target_dashboard_requires_root_ca_recovery(
         audit.close()
 
 
-def test_stale_reauth_from_a_post_round_trips_back_to_work(
+def test_stale_reauth_reports_unsaved_target_and_protects_other_posts(
     tmp_path: Path,
 ) -> None:
     bootstrap = tmp_path / "keys" / "admin_bootstrap_password"
@@ -245,23 +246,24 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
     )
 
     try:
-        with TestClient(app, base_url="https://testserver") as client:
-            client.post(
-                "/admin/login",
-                data={
-                    "username": "admin",
-                    "password": "synthetic-bootstrap-password",
-                },
-                follow_redirects=False,
-            )
-            dashboard = client.get("/admin")
-            csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
-            assert csrf is not None
+        with mock.patch("time.time") as mock_time:
+            mock_time.return_value = 10000.0
+            with TestClient(app, base_url="https://testserver") as client:
+                client.post(
+                    "/admin/login",
+                    data={
+                        "username": "admin",
+                        "password": "synthetic-bootstrap-password",
+                    },
+                    follow_redirects=False,
+                )
+                dashboard = client.get("/admin")
+                csrf = re.search(
+                    r'name="csrf_token" value="([^"]+)"', dashboard.text
+                )
+                assert csrf is not None
 
-            with mock.patch(
-                "vcf_mcp.admin.auth.is_recent_reauth",
-                return_value=False,
-            ):
+                mock_time.return_value += auth.RECENT_REAUTH_WINDOW_SECONDS + 10
                 bounced = client.post(
                     "/admin/targets",
                     data={
@@ -277,6 +279,11 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
                 )
                 assert bounced.status_code == 303
                 assert bounced.headers["location"] == "/admin/reauth"
+                assert asyncio.run(runtime.list()) == ()
+
+                reauth_page = client.get("/admin/reauth")
+                assert reauth_page.status_code == 200
+                assert auth.DISCARDED_POST_NOTICE in reauth_page.text
 
                 confirmed = client.post(
                     "/admin/reauth",
@@ -289,21 +296,57 @@ def test_stale_reauth_from_a_post_round_trips_back_to_work(
                 assert confirmed.status_code == 303
                 assert confirmed.headers["location"] == "/admin"
 
-            registered = client.post(
-                "/admin/targets",
-                data={
-                    "csrf_token": csrf.group(1),
-                    "name": "devel",
-                    "fqdn": "devel.example.internal",
-                    "username": "synthetic-reader",
-                    "password": "synthetic-target-password",
-                    "auth_source": "LOCAL",
-                    "verify_ssl": "on",
-                },
-                follow_redirects=False,
-            )
-            assert registered.status_code == 303
-            assert registered.headers["location"] == "/admin"
+                returned = client.get(confirmed.headers["location"])
+                assert returned.status_code == 200
+                assert auth.DISCARDED_POST_NOTICE in returned.text
+
+                stored_bytes = b"".join(
+                    path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()
+                )
+                assert b"synthetic-target-password" not in stored_bytes
+
+                registered = client.post(
+                    "/admin/targets",
+                    data={
+                        "csrf_token": csrf.group(1),
+                        "name": "devel",
+                        "fqdn": "devel.example.internal",
+                        "username": "synthetic-reader",
+                        "password": "synthetic-target-password",
+                        "auth_source": "LOCAL",
+                        "verify_ssl": "on",
+                    },
+                    follow_redirects=False,
+                )
+                assert registered.status_code == 303
+                targets = asyncio.run(runtime.list())
+                assert len(targets) == 1
+                assert targets[0].fqdn == "devel.example.internal"
+
+                refreshed_dashboard = client.get(registered.headers["location"])
+                refreshed_csrf = re.search(
+                    r'name="csrf_token" value="([^"]+)"', refreshed_dashboard.text
+                )
+                assert refreshed_csrf is not None
+
+                mock_time.return_value += auth.RECENT_REAUTH_WINDOW_SECONDS + 10
+                other_bounced = client.post(
+                    "/admin/authorization-mode",
+                    data={
+                        "csrf_token": refreshed_csrf.group(1),
+                        "authorization_mode": AuthorizationMode.GATEWAY.value,
+                    },
+                    follow_redirects=False,
+                )
+                assert other_bounced.status_code == 303
+                assert other_bounced.headers["location"] == "/admin/reauth"
+                assert (
+                    asyncio.run(runtime.authorization_mode())
+                    is AuthorizationMode.LOCAL
+                )
+
+                other_reauth_page = client.get("/admin/reauth")
+                assert auth.DISCARDED_POST_NOTICE in other_reauth_page.text
     finally:
         runtime.close()
         audit.close()

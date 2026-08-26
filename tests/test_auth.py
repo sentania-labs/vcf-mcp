@@ -113,6 +113,22 @@ def test_stale_reauth_from_a_post_returns_to_the_dashboard():
     assert isinstance(result, RedirectResponse)
     assert result.headers["location"] == "/admin/reauth"
     assert req.session["next"] == "/admin"
+    assert auth.discarded_post_notice(req) == auth.DISCARDED_POST_NOTICE
+
+
+def test_discarded_post_notice_expires():
+    now = time.time()
+    req = build_mock_request(
+        {
+            "discarded_post_notice": {
+                "message": auth.DISCARDED_POST_NOTICE,
+                "expires_at": now - 1,
+            }
+        }
+    )
+
+    assert auth.discarded_post_notice(req) is None
+    assert "discarded_post_notice" not in req.session
 
 def test_refresh_reauth_preserves_the_csrf_token():
     now = time.time()

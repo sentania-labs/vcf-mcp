@@ -20,7 +20,9 @@ def create_admin_app(audit_writable: bool = True):
 
     async def test_setup_session(request):
         auth.initialize_session(request, "admin")
-        return JSONResponse({"status": "ok"})
+        return JSONResponse(
+            {"status": "ok", "csrf_token": request.session["csrf_token"]}
+        )
 
     app = Starlette(
         routes=admin_routes + [Route("/admin/test-setup-session", endpoint=test_setup_session, methods=["GET"])],
@@ -110,14 +112,36 @@ def test_security_write_requires_recent_reauth():
     # Login but force the auth_time to be stale
     with mock.patch("time.time") as mock_time:
         mock_time.return_value = 10000.0
-        client.get("/admin/test-setup-session")
+        setup = client.get("/admin/test-setup-session")
+        csrf_token = setup.json()["csrf_token"]
         
         # Advance time past the recent reauth window
         mock_time.return_value = 10000.0 + auth.RECENT_REAUTH_WINDOW_SECONDS + 10
         
-        resp = client.post("/admin/targets", data={"csrf_token": "dummy"}, follow_redirects=False)
+        resp = client.post(
+            "/admin/targets",
+            data={"csrf_token": csrf_token},
+            follow_redirects=False,
+        )
         assert resp.status_code == 303
         assert "/admin/reauth" in resp.headers["location"]
+
+
+def test_security_write_rejects_forged_csrf_before_stale_reauth_redirect():
+    client = TestClient(create_admin_app())
+    with mock.patch("time.time") as mock_time:
+        mock_time.return_value = 10000.0
+        client.get("/admin/test-setup-session")
+        mock_time.return_value = 10000.0 + auth.RECENT_REAUTH_WINDOW_SECONDS + 10
+
+        response = client.post(
+            "/admin/targets",
+            data={"csrf_token": "forged-token"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert b"CSRF verification failed" in response.content
 
 
 def test_restart_requires_authentication_recent_reauth_and_csrf(logged_in_client):
@@ -139,8 +163,7 @@ def test_restart_requires_authentication_recent_reauth_and_csrf(logged_in_client
             data={"csrf_token": "wrong"},
             follow_redirects=False,
         )
-    assert response.status_code == 303
-    assert response.headers["location"] == "/admin/reauth"
+    assert response.status_code == 403
 
 
 def test_restart_fails_closed_when_audit_is_degraded():
