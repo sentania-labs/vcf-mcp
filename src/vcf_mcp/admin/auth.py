@@ -99,13 +99,15 @@ def refresh_reauth(request: Request) -> None:
     request.session["last_active"] = now
 
 
-def require_recent_reauth(request: Request) -> RedirectResponse | None:
+def require_recent_reauth(
+    request: Request, *, next_path: str = "/admin"
+) -> RedirectResponse | None:
     if not is_recent_reauth(request):
         # Store only a local path, and only for safe methods. A full URL
         # would turn this into an open redirect if proxy headers or a future
         # caller supplied another host, and a POST-only path would land the
         # post-reauth GET redirect on a 405.
-        path = "/admin"
+        path = next_path if next_path.startswith("/admin") else "/admin"
         if request.scope.get("method", "").upper() in {"GET", "HEAD"}:
             candidate = request.scope.get("path")
             if not isinstance(candidate, str):
@@ -116,13 +118,17 @@ def require_recent_reauth(request: Request) -> RedirectResponse | None:
             if candidate.startswith("/"):
                 path = candidate
         else:
-            request.session[_DISCARDED_POST_NOTICE_KEY] = {
-                "message": DISCARDED_POST_NOTICE,
-                "expires_at": time.time() + DISCARDED_POST_NOTICE_SECONDS,
-            }
+            record_discarded_post_notice(request)
         request.session["next"] = path
         return RedirectResponse(url="/admin/reauth", status_code=303)
     return None
+
+
+def record_discarded_post_notice(request: Request) -> None:
+    request.session[_DISCARDED_POST_NOTICE_KEY] = {
+        "message": DISCARDED_POST_NOTICE,
+        "expires_at": time.time() + DISCARDED_POST_NOTICE_SECONDS,
+    }
 
 
 def discarded_post_notice(request: Request, *, consume: bool = False) -> str | None:

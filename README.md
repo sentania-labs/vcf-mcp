@@ -164,6 +164,12 @@ with scrypt, and never retains the source value. There is no default password
 and no file-editing prerequisite. The one-use password-file bootstrap remains
 available for orchestrated deployments.
 
+The console groups controls into Overview, Targets, API keys, Packs,
+Maintenance, and Audit tabs. The selected tab is stored in the `/admin?tab=`
+URL, so reloads, bookmarks, and shared links return to the same area. The Audit
+tab summarizes recent configuration events. The complete MCP tool-call ledger
+remains available at `/admin/audit`.
+
 Sensitive changes require password confirmation within the previous five
 minutes. If that window expires, the console does not save or retain the
 submitted fields. It displays a notice, then requires the operator to confirm

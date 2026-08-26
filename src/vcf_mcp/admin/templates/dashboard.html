@@ -12,6 +12,16 @@
 </div>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
+<nav class="tabs" aria-label="Administration areas">
+  <a href="/admin?tab=overview" {% if active_tab == "overview" %}aria-current="page"{% endif %}>Overview</a>
+  <a href="/admin?tab=targets" {% if active_tab == "targets" %}aria-current="page"{% endif %}>Targets</a>
+  <a href="/admin?tab=api-keys" {% if active_tab == "api-keys" %}aria-current="page"{% endif %}>API keys</a>
+  <a href="/admin?tab=packs" {% if active_tab == "packs" %}aria-current="page"{% endif %}>Packs</a>
+  <a href="/admin?tab=maintenance" {% if active_tab == "maintenance" %}aria-current="page"{% endif %}>Maintenance</a>
+  <a href="/admin?tab=audit" {% if active_tab == "audit" %}aria-current="page"{% endif %}>Audit</a>
+</nav>
+
+{% if active_tab == "overview" %}
 <section class="card notice">
   <h2>Startup-frozen endpoints</h2>
   <p>Backend tools are derived from registrations at process start. After adding the first target for a product, restart the container to activate its endpoint. Removing runtime loading keeps the dispatcher boundary fixed.</p>
@@ -22,11 +32,7 @@
     {% endfor %}
   </div>
   {% if restart_required %}
-  <p class="warning">A configuration or backend-pack change is waiting for a process restart. New connections will pause, active requests get a short grace period, and all console and MCP sessions will disconnect. The appliance returns automatically only when this container has a restart policy or runs under Compose or Kubernetes. Without one, it stays stopped until an operator starts it.</p>
-  <form method="post" action="/admin/restart">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button class="danger" type="submit">Restart appliance now</button>
-  </form>
+  <p class="warning">A configuration or backend-pack change is waiting for a process restart. <a href="/admin?tab=maintenance">Review and restart from Maintenance.</a></p>
   {% endif %}
 </section>
 
@@ -48,8 +54,11 @@
     <button type="submit">Change mode and revoke active keys</button>
   </form>
 </section>
+{% endif %}
 
+{% if active_tab in ["targets", "api-keys"] %}
 <div class="grid" style="margin-top:1rem">
+  {% if active_tab == "targets" %}
   <section class="card">
     <h2>Register backend target</h2>
     <p class="muted">TLS verification starts disabled and is labelled that way. Upload a trusted root CA before enabling verification.</p>
@@ -80,7 +89,9 @@
       <button type="submit">Register read-only target</button>
     </form>
   </section>
+  {% endif %}
 
+  {% if active_tab == "api-keys" %}
   <section class="card">
     <h2>Mint MCP API key</h2>
     {% if authorization_mode.value == "gateway" %}
@@ -116,8 +127,11 @@
       <button type="submit">Mint {{ 'gateway registration' if authorization_mode.value == 'gateway' else 'local scoped' }} key</button>
     </form>
   </section>
+  {% endif %}
 </div>
+{% endif %}
 
+{% if active_tab == "targets" %}
 <section style="margin-top:1rem">
   <h2>Targets</h2>
   {% for target in targets %}
@@ -190,7 +204,9 @@
   <div class="card muted">No targets registered.</div>
   {% endfor %}
 </section>
+{% endif %}
 
+{% if active_tab == "api-keys" %}
 <section class="card" style="margin-top:1rem">
   <h2>API keys</h2>
   <table>
@@ -219,7 +235,9 @@
     </tbody>
   </table>
 </section>
+{% endif %}
 
+{% if active_tab == "maintenance" %}
 <section class="card" style="margin-top:1rem">
   <h2>Credential key rotation</h2>
   {% if rotation_status %}
@@ -233,6 +251,21 @@
   </form>
 </section>
 
+<section class="card" style="margin-top:1rem">
+  <h2>Appliance restart</h2>
+  {% if restart_required %}
+  <p class="warning">A configuration or backend-pack change is waiting for a process restart. New connections will pause, active requests get a short grace period, and all console and MCP sessions will disconnect. The appliance returns automatically only when this container has a restart policy or runs under Compose or Kubernetes. Without one, it stays stopped until an operator starts it.</p>
+  <form method="post" action="/admin/restart">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="danger" type="submit">Restart appliance now</button>
+  </form>
+  {% else %}
+  <p class="muted">No configuration or backend-pack change is waiting for restart.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if active_tab == "packs" %}
 <section class="card" style="margin-top:1rem">
   <h2>Backend pack trust</h2>
   <p class="muted">Signed updates are discovered from the public GHCR package and verified as immutable OCI artifacts. A signed pack and its Sigstore bundle can still be uploaded while disconnected. Both paths pin the release workflow identity and GitHub issuer. Installation is staged for activation on restart, and the prior version is retained.</p>
@@ -302,9 +335,12 @@
   {% endfor %}
   {% endif %}
 </section>
+{% endif %}
 
+{% if active_tab == "audit" %}
 <section class="card" style="margin-top:1rem">
   <h2>Recent configuration audit</h2>
+  <p><a href="/admin/audit">Open the full MCP tool-call audit</a></p>
   <table>
     <thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead>
     <tbody>
@@ -316,4 +352,5 @@
     </tbody>
   </table>
 </section>
+{% endif %}
 {% endblock %}

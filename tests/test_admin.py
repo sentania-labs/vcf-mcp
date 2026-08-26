@@ -148,7 +148,10 @@ def test_restart_requires_authentication_recent_reauth_and_csrf(logged_in_client
     unauthenticated = TestClient(create_admin_app())
     response = unauthenticated.post("/admin/restart", follow_redirects=False)
     assert response.status_code == 303
-    assert response.headers["location"] == "/admin/login"
+    assert (
+        response.headers["location"]
+        == "/admin/login?tab=maintenance&discarded_post=1"
+    )
 
     response = logged_in_client.post(
         "/admin/restart",
