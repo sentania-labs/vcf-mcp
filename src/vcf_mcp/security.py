@@ -139,6 +139,14 @@ def validate_private_file(path: Path) -> os.stat_result:
                     f" to 0600 failed ({exc}); set mode to 0600 or remove all"
                     " 'other' permissions"
                 ) from exc
+            service_gids = {os.getegid(), *os.getgroups()}
+            if details.st_gid not in service_gids:
+                raise SecretStoreUnavailable(
+                    f"private file {path} has mode {mode:04o} and gid"
+                    f" {details.st_gid}, but the service belongs to gids"
+                    f" {sorted(service_gids)}; set the file group to a service"
+                    " group or set mode to 0600"
+                ) from exc
             LOGGER.warning(
                 "private file %s has mode %04o and could not be tightened to 0600"
                 " (%s); continuing because only service-owner and group access is"

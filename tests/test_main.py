@@ -158,6 +158,9 @@ class ProductionAppTests(unittest.TestCase):
         self.assertIs(body["ready"], False)
         self.assertIs(body["audit_writable"], False)
         self.assertIsNone(body["unreconciled_outcome_unknown_count"])
+        audit_error = body["startup_errors"]["audit"]
+        self.assertIn(str(Path(environment["AUDIT_DB_PATH"])), audit_error)
+        self.assertIn("could not be opened", audit_error)
 
     def test_a_missing_session_secret_is_generated_and_persisted(self) -> None:
         environment = self.environment()
@@ -246,8 +249,16 @@ class ProductionAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         errors = response.json()["startup_errors"]
-        self.assertEqual(errors["backend_packs"], "backend pack failure")
-        self.assertEqual(errors["skills_catalog"], "skills catalog failure")
+        self.assertEqual(
+            errors["backend_packs"],
+            "backend packs could not be loaded; starting degraded: backend pack"
+            " failure",
+        )
+        self.assertEqual(
+            errors["skills_catalog"],
+            f"skills catalog at {environment['SKILLS_PATH']} could not be loaded;"
+            " starting degraded: skills catalog failure",
+        )
 
     def test_an_unwritable_session_secret_path_reports_503(self) -> None:
         blocker = self.root / "secret-blocker"

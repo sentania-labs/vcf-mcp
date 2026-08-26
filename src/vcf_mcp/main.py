@@ -84,8 +84,9 @@ def _record_startup_error(
     exc: BaseException,
 ) -> None:
     reason = _exception_chain(exc)
-    startup_errors[dependency] = reason
-    LOGGER.exception("%s: %s", summary, reason)
+    details = f"{summary}: {reason}"
+    startup_errors[dependency] = details
+    LOGGER.exception("%s", details)
 
 
 def create_production_app(

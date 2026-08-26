@@ -52,6 +52,54 @@ def test_group_access_is_accepted_and_logged_when_chmod_fails(
     assert "only service-owner and group access is present" in caplog.text
 
 
+def test_supplementary_group_access_is_accepted_when_chmod_fails(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "credential_keyring.json"
+    _private_file(path, 0o660)
+    file_gid = path.stat().st_gid
+
+    with (
+        mock.patch(
+            "vcf_mcp.security.os.chmod",
+            side_effect=PermissionError("read-only mount"),
+        ),
+        mock.patch("vcf_mcp.security.os.getegid", return_value=file_gid + 1),
+        mock.patch("vcf_mcp.security.os.getgroups", return_value=[file_gid]),
+    ):
+        details = validate_private_file(path)
+
+    assert details.st_mode & 0o777 == 0o660
+
+
+def test_unrelated_group_access_is_refused_when_chmod_fails(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "credential_keyring.json"
+    _private_file(path, 0o660)
+    file_gid = path.stat().st_gid
+    service_gids = [file_gid + 1, file_gid + 2]
+
+    with (
+        mock.patch(
+            "vcf_mcp.security.os.chmod",
+            side_effect=PermissionError("read-only mount"),
+        ),
+        mock.patch("vcf_mcp.security.os.getegid", return_value=service_gids[0]),
+        mock.patch(
+            "vcf_mcp.security.os.getgroups", return_value=[service_gids[1]]
+        ),
+        pytest.raises(SecretStoreUnavailable) as failure,
+    ):
+        validate_private_file(path)
+
+    message = str(failure.value)
+    assert str(path) in message
+    assert f"gid {file_gid}" in message
+    assert str(service_gids) in message
+    assert "set the file group to a service group or set mode to 0600" in message
+
+
 def test_successful_no_op_chmod_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "session_secret"
     _private_file(path, 0o604)
