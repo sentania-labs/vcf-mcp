@@ -13,6 +13,7 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="/admin/login">
     <input type="hidden" name="tab" value="{{ tab }}">
+    {% if discarded_post %}<input type="hidden" name="discarded_post" value="1">{% endif %}
     <label for="username">Username</label>
     <input id="username" name="username" value="admin" autocomplete="username" required>
     <label for="password">Password</label>

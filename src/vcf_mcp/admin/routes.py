@@ -109,7 +109,7 @@ def _recent_reauth_post(endpoint, *, tab: str):
 
     @functools.wraps(endpoint)
     async def wrapper(request: Request):
-        check = await require_auth(request)
+        check = await require_auth(request, tab=tab)
         if check:
             return check
         form = await request.form()
@@ -134,15 +134,20 @@ async def require_auth(
     timeout = auth.enforce_idle_timeout(request)
     if timeout:
         if tab is not None:
+            if request.method == "POST":
+                auth.record_discarded_post_notice(request)
             selected_tab = _dashboard_url(tab).removeprefix("/admin?tab=")
+            discarded_query = "&discarded_post=1" if request.method == "POST" else ""
             return RedirectResponse(
-                url=f"/admin/login?tab={selected_tab}", status_code=303
+                url=f"/admin/login?tab={selected_tab}{discarded_query}", status_code=303
             )
         return timeout
     if "user_id" not in request.session:
         login_url = "/admin/login"
         if tab is not None:
             login_url = f"{login_url}?tab={_dashboard_url(tab).removeprefix('/admin?tab=')}"
+            if request.method == "POST":
+                login_url = f"{login_url}&discarded_post=1"
         return RedirectResponse(url=login_url, status_code=303)
     return None
 
@@ -159,6 +164,10 @@ async def get_login(request: Request):
             "bootstrap_required": not await repository.has_admin(),
             "error": None,
             "tab": tab if tab in DASHBOARD_TABS else "overview",
+            "discarded_post": (
+                request.query_params.get("discarded_post") == "1"
+                or auth.discarded_post_notice(request) is not None
+            ),
         },
     )
 
@@ -170,6 +179,7 @@ async def post_login(request: Request):
     password = str(form.get("password", ""))
     tab = str(form.get("tab", "overview"))
     tab = tab if tab in DASHBOARD_TABS else "overview"
+    discarded_post = form.get("discarded_post") == "1"
     await repository.initialize_admin_from_bootstrap_file()
     if not await repository.has_admin():
         confirmation = str(form.get("password_confirmation", ""))
@@ -185,6 +195,7 @@ async def post_login(request: Request):
                     "bootstrap_required": True,
                     "error": "Use the admin username and enter matching passwords.",
                     "tab": tab,
+                    "discarded_post": discarded_post,
                 },
                 status_code=400,
             )
@@ -194,7 +205,12 @@ async def post_login(request: Request):
             return templates.TemplateResponse(
                 request,
                 "login.html",
-                {"bootstrap_required": True, "error": str(exc), "tab": tab},
+                {
+                    "bootstrap_required": True,
+                    "error": str(exc),
+                    "tab": tab,
+                    "discarded_post": discarded_post,
+                },
                 status_code=400,
             )
     valid = secrets.compare_digest(
@@ -208,10 +224,13 @@ async def post_login(request: Request):
                 "bootstrap_required": not await repository.has_admin(),
                 "error": "Invalid credentials or bootstrap is not complete.",
                 "tab": tab,
+                "discarded_post": discarded_post,
             },
             status_code=401,
         )
     auth.initialize_session(request, "admin")
+    if discarded_post:
+        auth.record_discarded_post_notice(request)
     return RedirectResponse(url=_dashboard_url(tab), status_code=303)
 
 
@@ -570,7 +589,7 @@ async def post_pack_trust_refresh(request: Request):
 
 
 async def post_pack_registry_check(request: Request):
-    check = await require_auth(request)
+    check = await require_auth(request, tab="packs")
     if check:
         return check
     form = await request.form()

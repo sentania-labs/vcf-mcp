@@ -223,6 +223,76 @@ def test_tab_urls_reload_and_remain_available_during_degraded_start(
         audit.close()
 
 
+def test_idle_timeout_post_returns_to_owning_tab_with_discard_notice(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+
+    try:
+        with mock.patch("time.time") as mock_time:
+            mock_time.return_value = 10000.0
+            with TestClient(app, base_url="https://testserver") as client:
+                client.post(
+                    "/admin/login",
+                    data={
+                        "username": "admin",
+                        "password": "synthetic-admin-password",
+                    },
+                )
+                dashboard = client.get("/admin?tab=targets")
+                csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text)
+                assert csrf is not None
+
+                mock_time.return_value += auth.IDLE_TIMEOUT_SECONDS + 10
+                bounced = client.post(
+                    "/admin/targets",
+                    data={"csrf_token": csrf.group(1)},
+                    follow_redirects=False,
+                )
+                assert bounced.status_code == 303
+                assert (
+                    bounced.headers["location"]
+                    == "/admin/login?tab=targets&discarded_post=1"
+                )
+
+                login_page = client.get(bounced.headers["location"])
+                assert 'name="tab" value="targets"' in login_page.text
+                assert 'name="discarded_post" value="1"' in login_page.text
+                logged_in = client.post(
+                    "/admin/login",
+                    data={
+                        "username": "admin",
+                        "password": "synthetic-admin-password",
+                        "tab": "targets",
+                        "discarded_post": "1",
+                    },
+                    follow_redirects=False,
+                )
+                assert logged_in.headers["location"] == "/admin?tab=targets"
+
+                returned = client.get(logged_in.headers["location"])
+                assert auth.DISCARDED_POST_NOTICE in returned.text
+                assert 'href="/admin?tab=targets" aria-current="page"' in returned.text
+                assert asyncio.run(runtime.list()) == ()
+    finally:
+        runtime.close()
+        audit.close()
+
+
 def test_quarantined_target_dashboard_requires_root_ca_recovery(
     tmp_path: Path,
 ) -> None:

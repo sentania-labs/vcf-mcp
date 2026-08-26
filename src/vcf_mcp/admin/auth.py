@@ -118,13 +118,17 @@ def require_recent_reauth(
             if candidate.startswith("/"):
                 path = candidate
         else:
-            request.session[_DISCARDED_POST_NOTICE_KEY] = {
-                "message": DISCARDED_POST_NOTICE,
-                "expires_at": time.time() + DISCARDED_POST_NOTICE_SECONDS,
-            }
+            record_discarded_post_notice(request)
         request.session["next"] = path
         return RedirectResponse(url="/admin/reauth", status_code=303)
     return None
+
+
+def record_discarded_post_notice(request: Request) -> None:
+    request.session[_DISCARDED_POST_NOTICE_KEY] = {
+        "message": DISCARDED_POST_NOTICE,
+        "expires_at": time.time() + DISCARDED_POST_NOTICE_SECONDS,
+    }
 
 
 def discarded_post_notice(request: Request, *, consume: bool = False) -> str | None:
