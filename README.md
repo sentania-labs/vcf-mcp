@@ -164,6 +164,11 @@ with scrypt, and never retains the source value. There is no default password
 and no file-editing prerequisite. The one-use password-file bootstrap remains
 available for orchestrated deployments.
 
+Sensitive changes require password confirmation within the previous five
+minutes. If that window expires, the console does not save or retain the
+submitted fields. It displays a notice, then requires the operator to confirm
+the password and submit the change again.
+
 1. Register the product targets needed by this appliance. Leave TLS disabled
    only until the correct CA is uploaded.
 2. Use **Restart appliance now** in the startup-frozen endpoints notice.
