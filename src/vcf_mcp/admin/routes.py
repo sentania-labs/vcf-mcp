@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import functools
-import hashlib
-import json
 import os
 import secrets
 
@@ -35,8 +33,10 @@ from vcf_mcp.contracts import (
     invalidation_mode_for_change,
 )
 from vcf_mcp.runtime_repository import (
+    GlobalRootCaTargetSetChanged,
     RuntimeRepository,
     RuntimeStoreUnavailable,
+    global_ca_target_digest,
 )
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -50,15 +50,6 @@ DASHBOARD_TABS = frozenset(
 def _dashboard_url(tab: str) -> str:
     selected_tab = tab if tab in DASHBOARD_TABS else "overview"
     return f"/admin?tab={selected_tab}"
-
-
-def _removal_target_digest(targets) -> str:
-    displayed = sorted(
-        (str(target.id), target.name, target.fqdn, target.has_custom_ca)
-        for target in targets
-    )
-    encoded = json.dumps(displayed, ensure_ascii=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _requested_dashboard_tab(request: Request) -> str:
@@ -388,7 +379,9 @@ async def post_global_root_ca_remove(request: Request):
             active_tab="targets",
         )
     presented_digest = str(form.get("affected_targets_digest", ""))
-    if not secrets.compare_digest(presented_digest, _removal_target_digest(affected)):
+    try:
+        await repository.remove_global_root_ca(presented_digest)
+    except GlobalRootCaTargetSetChanged:
         return await _dashboard_response(
             request,
             error=(
@@ -398,7 +391,6 @@ async def post_global_root_ca_remove(request: Request):
             status_code=409,
             active_tab="targets",
         )
-    await repository.remove_global_root_ca()
     invalidator = getattr(request.app.state, "target_invalidator", None)
     invalidate_all = getattr(invalidator, "invalidate_all", None)
     if callable(invalidate_all):
@@ -903,7 +895,7 @@ async def _dashboard_response(
         "dashboard.html",
         {
             "targets": targets,
-            "removal_target_digest": _removal_target_digest(targets),
+            "removal_target_digest": global_ca_target_digest(targets),
             "target_trust": target_trust,
             "global_root_ca": await repository.get_global_root_ca(),
             "global_ca_fingerprints": (

@@ -66,8 +66,21 @@ _FQDN = re.compile(
 )
 
 
+def global_ca_target_digest(targets: tuple[TargetRecord, ...]) -> str:
+    displayed = sorted(
+        (str(target.id), target.name, target.fqdn, target.has_custom_ca)
+        for target in targets
+    )
+    encoded = json.dumps(displayed, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 class RuntimeStoreUnavailable(RuntimeError):
     """Raised when runtime configuration cannot be used safely."""
+
+
+class GlobalRootCaTargetSetChanged(ValueError):
+    """Raised when global CA removal confirmation is stale."""
 
 
 class AllTargetsIntegrityFailed(RuntimeStoreUnavailable):
@@ -253,10 +266,14 @@ class RuntimeRepository:
 
         return await asyncio.to_thread(self._set_global_root_ca_sync, root_ca_pem)
 
-    async def remove_global_root_ca(self) -> tuple[TargetRecord, ...]:
+    async def remove_global_root_ca(
+        self, expected_target_digest: str
+    ) -> tuple[TargetRecord, ...]:
         """Remove appliance trust and return the targets that lost that trust."""
 
-        return await asyncio.to_thread(self._remove_global_root_ca_sync)
+        return await asyncio.to_thread(
+            self._remove_global_root_ca_sync, expected_target_digest
+        )
 
     async def update_target(
         self,
@@ -1036,14 +1053,27 @@ class RuntimeRepository:
             connection.commit()
             return event_type
 
-    def _remove_global_root_ca_sync(self) -> tuple[TargetRecord, ...]:
+    def _remove_global_root_ca_sync(
+        self, expected_target_digest: str
+    ) -> tuple[TargetRecord, ...]:
         with self._write_transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             previous = connection.execute(
                 "SELECT value FROM settings WHERE name = 'global_root_ca_pem'"
             ).fetchone()
             if previous is None:
+                connection.commit()
                 return ()
-            targets = self._list_sync()
+            rows = connection.execute(
+                "SELECT * FROM targets ORDER BY name, id"
+            ).fetchall()
+            targets = tuple(self._target_from_row(row) for row in rows)
+            if not secrets.compare_digest(
+                expected_target_digest, global_ca_target_digest(targets)
+            ):
+                raise GlobalRootCaTargetSetChanged(
+                    "the affected target set changed since this page loaded"
+                )
             connection.execute(
                 "DELETE FROM settings WHERE name = 'global_root_ca_pem'"
             )
