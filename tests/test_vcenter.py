@@ -9,6 +9,7 @@ from vcf_mcp.backend_packs import load_backend_packs
 from vcf_mcp.contracts import (
     BackendKind,
     ConfigurationGeneration,
+    EffectiveTargetTrust,
     InvalidationMode,
     TargetConfigurationChange,
     TargetId,
@@ -358,6 +359,11 @@ class PoolRepository:
     async def get_root_ca(self, _target_id: TargetId) -> None:
         return None
 
+    async def get_effective_trust(
+        self, _target_id: TargetId
+    ) -> EffectiveTargetTrust:
+        return EffectiveTargetTrust(root_ca_pem=None)
+
 
 class PoolClient:
     def __init__(self, record: TargetRecord) -> None:
@@ -539,6 +545,11 @@ async def test_pool_get_cancels_a_superseded_client_on_trust_replacement() -> No
 
         async def get_root_ca(self, _target_id: TargetId) -> str | None:
             return self.root_ca
+
+        async def get_effective_trust(
+            self, _target_id: TargetId
+        ) -> EffectiveTargetTrust:
+            return EffectiveTargetTrust(root_ca_pem=self.root_ca)
 
     def factory(record: TargetRecord, _credentials, _root_ca) -> PoolClient:
         return PoolClient(record)

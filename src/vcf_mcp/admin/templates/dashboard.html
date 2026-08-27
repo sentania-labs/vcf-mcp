@@ -132,6 +132,41 @@
 {% endif %}
 
 {% if active_tab == "targets" %}
+<section class="card" style="margin-top:1rem">
+  <h2>Appliance root CA</h2>
+  <p class="muted">This CA bundle is additive. Every target trusts it, and a target-specific CA adds trust without replacing it.</p>
+  {% if global_root_ca %}
+  <p><span class="badge good">configured</span></p>
+  <ul>
+    {% for fingerprint in global_ca_fingerprints %}
+    <li>Appliance CA SHA-256 <code>{{ fingerprint }}</code></li>
+    {% endfor %}
+  </ul>
+  <form method="post" action="/admin/global-root-ca/remove">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="affected_targets_digest" value="{{ removal_target_digest }}">
+    <p class="warning">Removing the appliance CA removes this trust from these targets:</p>
+    <ul>
+      {% for target in targets %}
+      <li><strong>{{ target.name }}</strong> ({{ target.fqdn }}){% if target.has_custom_ca %}, its target-specific CA remains{% endif %}</li>
+      {% else %}
+      <li>No targets are currently registered.</li>
+      {% endfor %}
+    </ul>
+    <label><input type="checkbox" name="confirm_remove"> I reviewed the affected targets and confirm removal</label>
+    <button type="submit">Remove appliance CA</button>
+  </form>
+  {% else %}
+  <p><span class="badge">not configured</span> Targets use system trust and any target-specific CA.</p>
+  {% endif %}
+  <form method="post" action="/admin/global-root-ca" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="global-root-ca">{{ 'Replace' if global_root_ca else 'Set' }} appliance root CA bundle (PEM)</label>
+    <input id="global-root-ca" name="root_ca" type="file" accept=".pem,.crt,text/plain,application/x-pem-file" required>
+    <button type="submit">{{ 'Replace' if global_root_ca else 'Set' }} appliance CA</button>
+  </form>
+</section>
+
 <section style="margin-top:1rem">
   <h2>Targets</h2>
   {% for target in targets %}
@@ -140,9 +175,21 @@
       <strong>{{ target.name }}</strong>
       <span class="badge">{{ target.backend.value }}</span>
       <span class="badge {{ 'good' if target.verify_ssl else 'bad' }}">{{ 'TLS verified' if target.verify_ssl else 'TLS verification disabled' }}</span>
+      {% if target_trust[target.id].uses_global_ca %}<span class="badge good">appliance CA</span>{% endif %}
+      {% if target_trust[target.id].uses_target_ca %}<span class="badge good">target CA</span>{% endif %}
+      {% if target_trust[target.id].target_ca_configured and not target_trust[target.id].target_ca_available %}<span class="badge bad">target CA unavailable</span>{% endif %}
       {% if target.auth_locked %}<span class="badge bad">authentication locked</span>{% endif %}
       {% if not target.is_usable %}<span class="badge bad">credential integrity failed</span>{% endif %}
     </summary>
+    <p><strong>Trusted CA sources:</strong>
+      {% if target_trust[target.id].uses_global_ca %}appliance CA{% endif %}{% if target_trust[target.id].uses_global_ca and target_trust[target.id].uses_target_ca %} plus {% endif %}{% if target_trust[target.id].uses_target_ca %}target-specific CA{% endif %}{% if not target_trust[target.id].uses_global_ca and not target_trust[target.id].uses_target_ca %}system trust only{% endif %}.
+    </p>
+    {% if target_trust[target.id].uses_global_ca or target_trust[target.id].uses_target_ca %}
+    <ul>
+      {% for fingerprint in target_trust[target.id].global_ca_fingerprints %}<li>Appliance CA SHA-256 <code>{{ fingerprint }}</code></li>{% endfor %}
+      {% for fingerprint in target_trust[target.id].target_ca_fingerprints %}<li>Target CA SHA-256 <code>{{ fingerprint }}</code></li>{% endfor %}
+    </ul>
+    {% endif %}
     <form method="post" action="/admin/targets/{{ target.id }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="configuration_generation" value="{{ target.configuration_generation }}">

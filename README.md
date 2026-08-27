@@ -29,15 +29,21 @@ offering.
 ## What the prototype proves
 
 - The admin UI registers every built-in backend target, edits its display
-  name, FQDN, credentials, posture, root CA, and per-target TLS policy.
+  name, FQDN, credentials, posture, root CA, and per-target TLS policy. It also
+  sets, replaces, and removes one appliance-wide root CA.
 - New targets start with TLS verification disabled. The UI labels that state
-  plainly. An operator can upload a PEM root CA and enable verification for
-  that target without changing process-wide trust.
-- Credential edits use the same AES-256-GCM store as registration. Root CA
-  bundles are encrypted through that same keyring-backed path.
-- Enabling TLS verification, replacing a CA, or removing a CA cancels requests
-  already running through that target. Other edits drain started work and
-  discard results from the superseded target generation.
+  plainly. Appliance-wide and target-specific PEM root CA bundles are
+  additive, so a target trusts both when both are configured. The console
+  shows each effective source and its SHA-256 certificate fingerprints.
+- Credential edits use the same AES-256-GCM store as registration.
+  Target-specific CA bundles are encrypted through that same keyring-backed
+  path. The appliance CA is stored in the runtime database and follows its
+  existing backup and restore procedure.
+- Enabling TLS verification, replacing a target CA, or removing a target CA
+  cancels requests already running through that target. Setting, replacing,
+  or removing the appliance CA cancels requests through every target. Other
+  edits drain started work and discard results from the superseded target
+  generation.
 - API keys select endpoints, capabilities, and targets. Revocation applies on
   the next request.
 - Local mode supports many explicitly scoped keys and defaults new keys to no
@@ -82,7 +88,11 @@ baked into the image. An operator refresh from the fixed URL is persisted on
 files for the next restart because the active registry stays frozen. Unsigned install
 is off by default, persistently flagged when enabled, and refused whenever any
 target permits actions. Fingerprint pinning remains intentionally excluded.
-Uploaded CA bundles are the appliance TLS trust mechanism.
+Uploaded CA bundles are the appliance TLS trust mechanism. The appliance CA
+applies to every target, while a target-specific CA adds trust only for that
+target. Both retain system roots and TLS verification. Every PEM block in an
+upload must be a CA certificate. A mixed bundle is rejected in full, with the
+offending block type named, so private key material is never silently stored.
 
 The fixture proof cannot establish the following without Scott's hardware:
 
@@ -182,7 +192,9 @@ the password and submit the change again.
    first registration for a product needs an orderly process restart. Sessions
    disconnect. The appliance returns automatically only when its container has
    a restart policy, or when it runs under Compose or Kubernetes.
-3. Edit each target, upload its CA bundle, enable TLS verification, and save.
+3. On the Targets tab, upload the appliance CA for trust shared by every
+   target. Add a target-specific CA where needed, then enable TLS verification
+   on each target and save.
 4. Choose local or gateway authorization mode. Changing an existing mode
    revokes every active key.
 5. Mint local keys with explicit scopes and optional target restrictions, or
@@ -197,7 +209,7 @@ the password and submit the change again.
 
 | Volume path | Contents |
 | --- | --- |
-| `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and CA envelopes, API-key digests, operator packs, and the persisted refreshed pack trust root |
+| `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and target CA envelopes, the appliance CA, API-key digests, operator packs, and the persisted refreshed pack trust root |
 | `/keys` | Session secret, audit digest key, AES-256-GCM credential keyring, and optional one-use admin bootstrap file |
 | `/audit` | Append-only SQLite audit ledger |
 

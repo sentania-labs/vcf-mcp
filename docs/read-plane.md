@@ -143,28 +143,25 @@ the operator has replaced.
 
 ## TLS
 
-Per-target configuration on that target's own client, never a process-global
-disable. DEVEL presents a self-signed certificate that does not validate
-against the host trust store, so the honest first registration is per-target
-verification disabled, and the live tier runs that way.
+TLS verification remains per target, never a process-global disable. DEVEL
+presents a self-signed certificate that does not validate against the host
+trust store, so first registration starts with verification disabled.
 
-That exposes credentials and tokens to a local network attacker. **The clean
-answer is a mounted lab CA bundle, and it is the principal's call** because it
-is deployment trust material. Carried as Gate 1 packet item 6 and TLDR issue 4.
-Fingerprint pinning is not budgeted and is not built: normal validation cannot
-complete a handshake against an untrusted self-signed chain and then perform a
-post-handshake fingerprint check, so a correct implementation is a
-purpose-built transport plus an explicit first-trust ceremony.
+The admin UI accepts one appliance-wide CA bundle plus an optional CA bundle
+for each target. Both sources are additive with system roots, and the runtime
+assembles the effective trust bundle on the target's own client. Operators can
+therefore enable verification without duplicating a shared CA across targets.
+[Decision 024](decisions/024-additive-appliance-ca-trust.md) owns the
+appliance-wide trust contract. Fingerprint pinning is not built.
 
 ## Open questions this slice cannot answer
 
-1. **The lab CA bundle**, above. Principal's call.
-2. **Completed-report listing and download.** This spec ships report definition
+1. **Completed-report listing and download.** This spec ships report definition
    listing and detail only, per SPEC section 6. `GET /api/reports` on DEVEL is
    `totalCount: 0`, re-verified 2026-07-25, and creating a report instance is a
    mutation nobody is authorized to perform in Phase 1. This is a reduction
    against SPEC 4.1's `reports: list/run/download` line and it is flagged to the
    principal rather than taken as a team decision.
-3. **Whether the metrics cap is usable in practice.** It is derived from
+2. **Whether the metrics cap is usable in practice.** It is derived from
    payload measurement, not from watching an operator work. Gate 1 is the first
    time anyone reads real metrics through this server.

@@ -14,6 +14,7 @@ def test_setup_python_does_not_require_runner_local_pip_cache() -> None:
     )[0]
     assert "cache:" not in setup_python
     assert "actions/setup-python@v5" in setup_python
+    assert 'PIP_DEFAULT_TIMEOUT: "300"' in setup_python
     assert "python -m pip install -e '.[test]'" in text
 
 

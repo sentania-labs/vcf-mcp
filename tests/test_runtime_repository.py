@@ -315,6 +315,86 @@ async def test_targets_default_to_unverified_tls_and_invalid_ca_is_refused(
 
 
 @pytest.mark.asyncio
+async def test_effective_trust_adds_global_and_target_ca(
+    repository: RuntimeRepository,
+) -> None:
+    global_ca = synthetic_ca_pem()
+    target_ca = synthetic_ca_pem()
+    global_only = await repository.create_target(
+        name="global-only",
+        fqdn="global-only.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=True,
+    )
+    additive = await repository.create_target(
+        name="additive",
+        fqdn="additive.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=True,
+        root_ca_pem=target_ca,
+    )
+
+    assert await repository.set_global_root_ca(global_ca) == "global_root_ca_set"
+    global_trust = await repository.get_effective_trust(global_only.id)
+    additive_trust = await repository.get_effective_trust(additive.id)
+
+    assert global_trust.root_ca_pem == global_ca
+    assert global_trust.uses_global_ca is True
+    assert global_trust.uses_target_ca is False
+    assert additive_trust.root_ca_pem == global_ca + target_ca
+    assert additive_trust.uses_global_ca is True
+    assert additive_trust.uses_target_ca is True
+    assert len(additive_trust.global_ca_fingerprints) == 1
+    assert len(additive_trust.target_ca_fingerprints) == 1
+
+
+@pytest.mark.asyncio
+async def test_global_ca_rejects_malformed_submission_and_survives_backup(
+    repository: RuntimeRepository, tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="valid PEM CA certificates"):
+        await repository.set_global_root_ca("not a certificate")
+    assert await repository.get_global_root_ca() is None
+
+    global_ca = synthetic_ca_pem()
+    await repository.set_global_root_ca(global_ca)
+    backup = await repository.backup_database(tmp_path / "backup" / "config.sqlite3")
+    restored = RuntimeRepository(backup, repository.keyring_path, grantable_scopes=SCOPES)
+    restored.bootstrap()
+    try:
+        assert await restored.get_global_root_ca() == global_ca
+    finally:
+        restored.close()
+
+
+@pytest.mark.asyncio
+async def test_global_ca_rejects_private_key_before_storage_or_backup(
+    repository: RuntimeRepository, tmp_path: Path
+) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("ascii")
+    submitted_bundle = synthetic_ca_pem() + private_key_pem
+
+    with pytest.raises(ValueError, match="non-certificate PEM block: PRIVATE KEY"):
+        await repository.set_global_root_ca(submitted_bundle)
+
+    assert await repository.get_global_root_ca() is None
+    assert private_key_pem.encode("ascii") not in repository.database_path.read_bytes()
+    backup = await repository.backup_database(
+        tmp_path / "backup-after-rejection" / "config.sqlite3"
+    )
+    assert private_key_pem.encode("ascii") not in backup.read_bytes()
+
+
+@pytest.mark.asyncio
 async def test_endpoint_scopes_must_cover_each_allowed_target(
     repository: RuntimeRepository,
 ) -> None:

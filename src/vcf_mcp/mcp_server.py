@@ -196,7 +196,8 @@ class BackendClientPool:
                 existing.mark_closed()
                 stale = existing
             credentials = await self._repository.get_credentials(target.id)
-            root_ca = await self._repository.get_root_ca(target.id)
+            effective_trust = await self._repository.get_effective_trust(target.id)
+            root_ca = effective_trust.root_ca_pem
             client = self._build_client(target, credentials, root_ca)
             self._clients[target.id] = client
             self._trust[target.id] = (target.verify_ssl, root_ca)
@@ -300,6 +301,32 @@ class BackendClientPool:
             client.mark_closed()
             await client.aclose()
 
+    async def invalidate_all(self, *, mode: InvalidationMode) -> None:
+        """Discard every cached client after appliance trust changes."""
+
+        async with self._lock:
+            clients = tuple(self._clients.values())
+            self._clients.clear()
+            self._trust.clear()
+            self._confirmed_auth_generation.clear()
+            for client in clients:
+                client.mark_closed()
+        failures: list[Exception] = []
+        for client in clients:
+            try:
+                if mode is InvalidationMode.CANCEL:
+                    await client.cancel()
+                else:
+                    await client.drain()
+            except Exception as exc:
+                failures.append(exc)
+            try:
+                await client.aclose()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("backend client invalidation failures", failures)
+
 
 class CompositeInvalidator:
     """Fan one target edit out to every startup-frozen endpoint pool."""
@@ -320,6 +347,18 @@ class CompositeInvalidator:
             sum(result.drained_requests for result in results),
             sum(result.cancelled_requests for result in results),
         )
+
+    async def invalidate_all(self, *, mode: InvalidationMode) -> None:
+        """Fan an appliance trust change out to every backend pool."""
+
+        failures: list[Exception] = []
+        for pool in self._pools:
+            try:
+                await pool.invalidate_all(mode=mode)
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("backend pool invalidation failures", failures)
 
 
 @dataclass(frozen=True, slots=True)
