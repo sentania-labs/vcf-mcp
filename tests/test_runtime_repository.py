@@ -372,6 +372,29 @@ async def test_global_ca_rejects_malformed_submission_and_survives_backup(
 
 
 @pytest.mark.asyncio
+async def test_global_ca_rejects_private_key_before_storage_or_backup(
+    repository: RuntimeRepository, tmp_path: Path
+) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("ascii")
+    submitted_bundle = synthetic_ca_pem() + private_key_pem
+
+    with pytest.raises(ValueError, match="non-certificate PEM block: PRIVATE KEY"):
+        await repository.set_global_root_ca(submitted_bundle)
+
+    assert await repository.get_global_root_ca() is None
+    assert private_key_pem.encode("ascii") not in repository.database_path.read_bytes()
+    backup = await repository.backup_database(
+        tmp_path / "backup-after-rejection" / "config.sqlite3"
+    )
+    assert private_key_pem.encode("ascii") not in backup.read_bytes()
+
+
+@pytest.mark.asyncio
 async def test_endpoint_scopes_must_cover_each_allowed_target(
     repository: RuntimeRepository,
 ) -> None:

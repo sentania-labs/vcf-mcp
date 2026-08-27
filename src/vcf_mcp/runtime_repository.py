@@ -64,6 +64,9 @@ _FQDN = re.compile(
     r"(?=^.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
+_PEM_BLOCK = re.compile(
+    r"-----BEGIN ([A-Z0-9][A-Z0-9 ]*)-----.*?-----END \1-----", re.DOTALL
+)
 
 
 def global_ca_target_digest(
@@ -1902,7 +1905,24 @@ def _normalize_root_ca(value: str | None) -> str | None:
     if len(normalized.encode("utf-8")) > 256 * 1024:
         raise ValueError("root CA bundle exceeds the 256 KiB limit")
     try:
-        certificates = x509.load_pem_x509_certificates(normalized.encode("utf-8"))
+        blocks: list[str] = []
+        cursor = 0
+        for match in _PEM_BLOCK.finditer(normalized):
+            if normalized[cursor : match.start()].strip():
+                raise ValueError
+            block_type = match.group(1)
+            if block_type != "CERTIFICATE":
+                raise ValueError(
+                    f"root CA bundle contains non-certificate PEM block: {block_type}"
+                )
+            blocks.append(match.group(0))
+            cursor = match.end()
+        if normalized[cursor:].strip() or not blocks:
+            raise ValueError
+        certificates = [
+            x509.load_pem_x509_certificate(block.encode("utf-8"))
+            for block in blocks
+        ]
         if not certificates:
             raise ValueError
         for certificate in certificates:
@@ -1913,7 +1933,13 @@ def _normalize_root_ca(value: str | None) -> str | None:
                 raise ValueError
         context = ssl.create_default_context()
         context.load_verify_locations(cadata=normalized)
-    except (ValueError, ssl.SSLError, x509.ExtensionNotFound) as exc:
+    except ValueError as exc:
+        if str(exc).startswith("root CA bundle contains non-certificate PEM block:"):
+            raise
+        raise ValueError(
+            "root CA bundle must contain valid PEM CA certificates"
+        ) from exc
+    except (ssl.SSLError, x509.ExtensionNotFound) as exc:
         raise ValueError(
             "root CA bundle must contain valid PEM CA certificates"
         ) from exc
