@@ -90,7 +90,9 @@ is off by default, persistently flagged when enabled, and refused whenever any
 target permits actions. Fingerprint pinning remains intentionally excluded.
 Uploaded CA bundles are the appliance TLS trust mechanism. The appliance CA
 applies to every target, while a target-specific CA adds trust only for that
-target. Both retain system roots and TLS verification.
+target. Both retain system roots and TLS verification. Every PEM block in an
+upload must be a CA certificate. A mixed bundle is rejected in full, with the
+offending block type named, so private key material is never silently stored.
 
 The fixture proof cannot establish the following without Scott's hardware:
 
