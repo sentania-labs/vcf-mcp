@@ -34,8 +34,8 @@ leaves the prior host, credentials, trust, posture, and configuration
 generation unchanged.
 
 Verification has a 15 second whole-operation timeout. The console distinguishes
-name resolution, connection, certificate trust, credential rejection, and an
-unexpected reachable response. Probe attempts and terminal outcomes are
+name resolution, connection, timeout, certificate trust, credential rejection,
+and an unexpected reachable response. Probe attempts and terminal outcomes are
 written to the durable audit ledger without credential material. A successful
 timestamp is stored with the target and shown beside a manual recheck control.
 
