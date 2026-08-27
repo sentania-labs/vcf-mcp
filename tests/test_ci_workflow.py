@@ -54,9 +54,7 @@ def test_test_job_gate_excludes_fork_pull_requests() -> None:
     )
     assert "github.repository == 'sentania-labs/vcf-mcp'" in gate
     assert "github.event_name != 'pull_request'" in gate
-    assert (
-        "github.event.pull_request.head.repo.full_name == github.repository" in gate
-    )
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in gate
 
 
 def test_build_workflow_publishes_the_repository_image_without_deploying() -> None:
@@ -92,8 +90,7 @@ def test_image_builds_use_the_shared_remote_buildkit() -> None:
         )
         assert "driver: remote" in setup_buildx
         assert (
-            "endpoint: tcp://buildkitd.buildkit.svc.cluster.local:1234"
-            in setup_buildx
+            "endpoint: tcp://buildkitd.buildkit.svc.cluster.local:1234" in setup_buildx
         )
         assert (
             "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8"
@@ -127,7 +124,9 @@ def test_only_the_outside_cluster_smoke_job_uses_github_hosted_runner() -> None:
     for workflow in _workflow_files():
         for line in workflow.read_text().splitlines():
             if line.strip().startswith("runs-on:"):
-                assert line.strip() in ("runs-on: lab", "runs-on: ubuntu-latest"), workflow
+                assert line.strip() in ("runs-on: lab", "runs-on: ubuntu-latest"), (
+                    workflow
+                )
 
 
 def test_pack_workflow_publishes_signed_immutable_oci_artifacts() -> None:
@@ -135,12 +134,10 @@ def test_pack_workflow_publishes_signed_immutable_oci_artifacts() -> None:
     assert "packages: write" in text
     assert "id-token: write" in text
     assert "oras push" in text
-    assert "cosign sign --yes \"${reference}@${digest}\"" in text
+    assert 'cosign sign --yes "${reference}@${digest}"' in text
     assert "if ! cosign verify" in text
     assert "pack-${backend}-${version}" in text
-    assert (
-        "release-packs.yml@refs/heads/main" in text
-    )
+    assert "release-packs.yml@refs/heads/main" in text
     assert "application/vnd.sentania.vcf-mcp.backend-pack.v1+json" in text
 
 
