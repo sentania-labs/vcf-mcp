@@ -20,6 +20,7 @@ from vcf_mcp.vcf.client import (
     TOKEN_RELEASE_TIMEOUT,
     TargetCredentials,
     build_tls_verifier,
+    classify_transport_error,
 )
 from vcf_mcp.vcf.errors import (
     AuthenticationError,
@@ -29,7 +30,6 @@ from vcf_mcp.vcf.errors import (
     TargetConfigurationSuperseded,
     UpstreamProtocolError,
     UpstreamStatusError,
-    UpstreamUnavailableError,
 )
 from vcf_mcp.vcf.outbound import _SAFE_PATH_VALUE
 from vcf_mcp.upstream_control import UpstreamControl
@@ -293,9 +293,8 @@ class DeclaredBackendClient:
             try:
                 response = await send()
             except httpx.HTTPError as exc:
-                raise UpstreamUnavailableError(
-                    f"{self._pack.product} could not be reached ({type(exc).__name__})",
-                    target_id=self._target.id,
+                raise classify_transport_error(
+                    exc, target_id=self._target.id
                 ) from None
             if response.status_code != 429 or not await self._upstream_control.backoff_for_429(
                 attempt=attempt,
@@ -326,10 +325,7 @@ class DeclaredBackendClient:
                 request = next(auth.sync_auth_flow(request))
             response = await self._http.send(request, stream=True)
         except httpx.HTTPError as exc:
-            raise UpstreamUnavailableError(
-                f"{self._pack.product} could not be reached ({type(exc).__name__})",
-                target_id=self._target.id,
-            ) from None
+            raise classify_transport_error(exc, target_id=self._target.id) from None
         buffered = bytearray()
         try:
             async for chunk in response.aiter_bytes():

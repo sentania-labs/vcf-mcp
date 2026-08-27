@@ -22,6 +22,8 @@ import ssl
 import threading
 import uuid
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from cryptography import x509
@@ -54,7 +56,7 @@ DEFAULT_CONFIG_DB_PATH = Path("/data/config.sqlite3")
 DEFAULT_CREDENTIAL_KEYRING_PATH = Path("/keys/credential_keyring.json")
 DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE = Path("/keys/admin_bootstrap_password")
 PRODUCTION_FQDN = "vcf-lab-operations.int.sentania.net"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ENVELOPE_SCHEMA_VERSION = 2
 KEYRING_VERSION = 1
 MINIMUM_ADMIN_PASSWORD_BYTES = 16
@@ -94,6 +96,15 @@ class GlobalRootCaTargetSetChanged(ValueError):
 
 class AllTargetsIntegrityFailed(RuntimeStoreUnavailable):
     """Raised when no configured backend has a valid credential envelope."""
+
+
+@dataclass(frozen=True, slots=True)
+class TargetVerificationMaterial:
+    """Submitted target configuration held only long enough to verify it."""
+
+    target: TargetRecord
+    credentials: TargetCredentials
+    target_root_ca_pem: str | None
 
 
 def config_db_path_from_environment(
@@ -238,6 +249,8 @@ class RuntimeRepository:
         verify_ssl: bool,
         backend: BackendKind | str = BackendKind.OPS,
         root_ca_pem: str | None = None,
+        target_id: TargetId | None = None,
+        last_verified_at: datetime | None = None,
     ) -> TargetRecord:
         return await asyncio.to_thread(
             self._create_target_sync,
@@ -249,6 +262,33 @@ class RuntimeRepository:
             verify_ssl,
             backend,
             root_ca_pem,
+            target_id,
+            last_verified_at,
+        )
+
+    async def prepare_target_registration(
+        self,
+        *,
+        name: str,
+        fqdn: str,
+        username: str,
+        password: str,
+        auth_source: str,
+        verify_ssl: bool,
+        backend: BackendKind | str = BackendKind.OPS,
+        root_ca_pem: str | None = None,
+    ) -> TargetVerificationMaterial:
+        return await asyncio.to_thread(
+            self._prepare_target_registration_sync,
+            name,
+            fqdn,
+            username,
+            password,
+            auth_source,
+            verify_ssl,
+            backend,
+            root_ca_pem,
+            None,
         )
 
     async def get_credentials(self, target_id: TargetId) -> TargetCredentials:
@@ -298,6 +338,7 @@ class RuntimeRepository:
         posture: TargetPosture,
         root_ca_pem: str | None = None,
         clear_root_ca: bool = False,
+        last_verified_at: datetime | None = None,
     ) -> tuple[TargetRecord, TargetConfigurationChange]:
         return await asyncio.to_thread(
             self._update_target_sync,
@@ -312,6 +353,51 @@ class RuntimeRepository:
             posture,
             root_ca_pem,
             clear_root_ca,
+            last_verified_at,
+        )
+
+    async def prepare_target_update(
+        self,
+        *,
+        target_id: TargetId,
+        expected_generation: ConfigurationGeneration,
+        name: str,
+        fqdn: str,
+        username: str | None,
+        password: str | None,
+        auth_source: str,
+        verify_ssl: bool,
+        posture: TargetPosture,
+        root_ca_pem: str | None = None,
+        clear_root_ca: bool = False,
+    ) -> TargetVerificationMaterial:
+        return await asyncio.to_thread(
+            self._prepare_target_update_sync,
+            target_id,
+            expected_generation,
+            name,
+            fqdn,
+            username,
+            password,
+            auth_source,
+            verify_ssl,
+            posture,
+            root_ca_pem,
+            clear_root_ca,
+        )
+
+    async def mark_target_verified(
+        self,
+        target_id: TargetId,
+        *,
+        expected_generation: ConfigurationGeneration,
+        verified_at: datetime,
+    ) -> TargetRecord:
+        return await asyncio.to_thread(
+            self._mark_target_verified_sync,
+            target_id,
+            expected_generation,
+            verified_at,
         )
 
     async def save(
@@ -469,7 +555,8 @@ class RuntimeRepository:
                 unusable_reason TEXT,
                 auth_failure_count INTEGER NOT NULL DEFAULT 0,
                 auth_locked INTEGER NOT NULL DEFAULT 0
-                    CHECK (auth_locked IN (0, 1))
+                    CHECK (auth_locked IN (0, 1)),
+                last_verified_at TEXT
             );
             CREATE TABLE IF NOT EXISTS api_keys (
                 key_id TEXT PRIMARY KEY,
@@ -578,7 +665,7 @@ class RuntimeRepository:
             except BaseException:
                 connection.rollback()
                 raise
-        elif row[0] not in (3, 4, 5, SCHEMA_VERSION):
+        elif row[0] not in (3, 4, 5, 6, SCHEMA_VERSION):
             raise RuntimeStoreUnavailable(
                 f"unsupported runtime schema version {row[0]}"
             )
@@ -620,7 +707,7 @@ class RuntimeRepository:
         if current < SCHEMA_VERSION:
             connection.execute(
                 """
-                CREATE TABLE targets_v6 (
+                CREATE TABLE targets_v7 (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     fqdn TEXT NOT NULL UNIQUE,
@@ -641,22 +728,23 @@ class RuntimeRepository:
                     unusable_reason TEXT,
                     auth_failure_count INTEGER NOT NULL DEFAULT 0,
                     auth_locked INTEGER NOT NULL DEFAULT 0
-                        CHECK (auth_locked IN (0, 1))
+                        CHECK (auth_locked IN (0, 1)),
+                    last_verified_at TEXT
                 )
                 """
             )
             connection.execute(
                 """
-                INSERT INTO targets_v6 SELECT
+                INSERT INTO targets_v7 SELECT
                     id, name, fqdn, posture, is_prod, verify_ssl, auth_source,
                     configuration_generation, username_envelope,
                     password_envelope, backend, root_ca_envelope,
-                    unusable_reason, auth_failure_count, auth_locked
+                    unusable_reason, auth_failure_count, auth_locked, NULL
                 FROM targets
                 """
             )
             connection.execute("DROP TABLE targets")
-            connection.execute("ALTER TABLE targets_v6 RENAME TO targets")
+            connection.execute("ALTER TABLE targets_v7 RENAME TO targets")
             current = SCHEMA_VERSION
         connection.execute("UPDATE schema_version SET version = ?", (current,))
         connection.execute(
@@ -879,33 +967,28 @@ class RuntimeRepository:
         verify_ssl: bool,
         backend: BackendKind | str,
         root_ca_pem: str | None,
+        target_id: TargetId | None,
+        last_verified_at: datetime | None,
     ) -> TargetRecord:
-        normalized_fqdn = _normalize_fqdn(fqdn)
-        if not name.strip() or not username or not password:
-            raise ValueError("name, username, and password are required")
-        normalized_source = auth_source.strip().upper() or "LOCAL"
-        backend_kind = BackendKind(backend)
-        normalized_ca = _normalize_root_ca(root_ca_pem)
-        if verify_ssl and root_ca_pem is not None and normalized_ca is None:
-            raise ValueError("the uploaded root CA bundle is empty")
-        target_id = TargetId(str(uuid.uuid4()))
-        is_prod = normalized_fqdn == PRODUCTION_FQDN
-        target = TargetRecord(
-            id=target_id,
-            name=name.strip(),
-            fqdn=normalized_fqdn,
-            posture=TargetPosture.READ_ONLY,
-            is_prod=is_prod,
-            verify_ssl=verify_ssl,
-            auth_source=normalized_source,
-            configuration_generation=ConfigurationGeneration(1),
-            backend=backend_kind,
-            has_custom_ca=normalized_ca is not None,
+        material = self._prepare_target_registration_sync(
+            name,
+            fqdn,
+            username,
+            password,
+            auth_source,
+            verify_ssl,
+            backend,
+            root_ca_pem,
+            target_id,
         )
-        username_envelope = self._encrypt(target_id, "username", username)
-        password_envelope = self._encrypt(target_id, "password", password)
+        target = material.target
+        target = replace(target, last_verified_at=last_verified_at)
+        username, password = material.credentials.basic_auth_tuple()
+        normalized_ca = material.target_root_ca_pem
+        username_envelope = self._encrypt(target.id, "username", username)
+        password_envelope = self._encrypt(target.id, "password", password)
         root_ca_envelope = (
-            self._encrypt(target_id, "root_ca", normalized_ca)
+            self._encrypt(target.id, "root_ca", normalized_ca)
             if normalized_ca is not None
             else None
         )
@@ -917,8 +1000,8 @@ class RuntimeRepository:
                         id, name, fqdn, posture, is_prod, verify_ssl,
                         auth_source, configuration_generation,
                         username_envelope, password_envelope, backend,
-                        root_ca_envelope
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        root_ca_envelope, last_verified_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(target.id),
@@ -933,6 +1016,11 @@ class RuntimeRepository:
                         password_envelope,
                         target.backend.value,
                         root_ca_envelope,
+                        (
+                            None
+                            if target.last_verified_at is None
+                            else target.last_verified_at.isoformat()
+                        ),
                     ),
                 )
                 connection.execute(
@@ -944,6 +1032,46 @@ class RuntimeRepository:
             except sqlite3.IntegrityError as exc:
                 raise ValueError("a target with this FQDN already exists") from exc
         return target
+
+    def _prepare_target_registration_sync(
+        self,
+        name: str,
+        fqdn: str,
+        username: str,
+        password: str,
+        auth_source: str,
+        verify_ssl: bool,
+        backend: BackendKind | str,
+        root_ca_pem: str | None,
+        target_id: TargetId | None,
+    ) -> TargetVerificationMaterial:
+        normalized_fqdn = _normalize_fqdn(fqdn)
+        if not name.strip() or not username or not password:
+            raise ValueError("name, username, and password are required")
+        normalized_source = auth_source.strip().upper() or "LOCAL"
+        backend_kind = BackendKind(backend)
+        normalized_ca = _normalize_root_ca(root_ca_pem)
+        if verify_ssl and root_ca_pem is not None and normalized_ca is None:
+            raise ValueError("the uploaded root CA bundle is empty")
+        selected_target_id = target_id or TargetId(str(uuid.uuid4()))
+        is_prod = normalized_fqdn == PRODUCTION_FQDN
+        target = TargetRecord(
+            id=selected_target_id,
+            name=name.strip(),
+            fqdn=normalized_fqdn,
+            posture=TargetPosture.READ_ONLY,
+            is_prod=is_prod,
+            verify_ssl=verify_ssl,
+            auth_source=normalized_source,
+            configuration_generation=ConfigurationGeneration(1),
+            backend=backend_kind,
+            has_custom_ca=normalized_ca is not None,
+        )
+        return TargetVerificationMaterial(
+            target=target,
+            credentials=TargetCredentials(username, password, normalized_source),
+            target_root_ca_pem=normalized_ca,
+        )
 
     def _get_credentials_sync(self, target_id: TargetId) -> TargetCredentials:
         with self._lock:
@@ -1115,7 +1243,98 @@ class RuntimeRepository:
         posture: TargetPosture,
         root_ca_pem: str | None,
         clear_root_ca: bool,
+        last_verified_at: datetime | None,
     ) -> tuple[TargetRecord, TargetConfigurationChange]:
+        material = self._prepare_target_update_sync(
+            target_id,
+            expected_generation,
+            name,
+            fqdn,
+            username,
+            password,
+            auth_source,
+            verify_ssl,
+            posture,
+            root_ca_pem,
+            clear_root_ca,
+        )
+        target = replace(material.target, last_verified_at=last_verified_at)
+        selected_username, selected_password = material.credentials.basic_auth_tuple()
+        username_envelope = self._encrypt(target_id, "username", selected_username)
+        password_envelope = self._encrypt(target_id, "password", selected_password)
+        root_ca_envelope = (
+            None
+            if material.target_root_ca_pem is None
+            else self._encrypt(
+                target_id, "root_ca", material.target_root_ca_pem
+            )
+        )
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT configuration_generation FROM targets WHERE id = ?",
+                (str(target_id),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown target: {target_id}")
+            previous = ConfigurationGeneration(row["configuration_generation"])
+            if previous != expected_generation:
+                raise RuntimeStoreUnavailable("target configuration generation changed")
+            try:
+                connection.execute(
+                    """
+                    UPDATE targets SET name = ?, fqdn = ?, posture = ?,
+                        is_prod = ?, verify_ssl = ?, auth_source = ?,
+                        configuration_generation = ?, username_envelope = ?,
+                        password_envelope = ?, root_ca_envelope = ?,
+                        unusable_reason = NULL, auth_failure_count = 0,
+                        auth_locked = 0, last_verified_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        target.name,
+                        target.fqdn,
+                        target.posture.value,
+                        int(target.is_prod),
+                        int(target.verify_ssl),
+                        target.auth_source,
+                        int(target.configuration_generation),
+                        username_envelope,
+                        password_envelope,
+                        root_ca_envelope,
+                        (
+                            None
+                            if target.last_verified_at is None
+                            else target.last_verified_at.isoformat()
+                        ),
+                        str(target_id),
+                    ),
+                )
+                connection.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("a target with this FQDN already exists") from exc
+            stored = self._target_from_row(
+                connection.execute(
+                    "SELECT * FROM targets WHERE id = ?", (str(target_id),)
+                ).fetchone()
+            )
+            return stored, TargetConfigurationChange(
+                target_id, previous, target.configuration_generation
+            )
+
+    def _prepare_target_update_sync(
+        self,
+        target_id: TargetId,
+        expected_generation: ConfigurationGeneration,
+        name: str,
+        fqdn: str,
+        username: str | None,
+        password: str | None,
+        auth_source: str,
+        verify_ssl: bool,
+        posture: TargetPosture,
+        root_ca_pem: str | None,
+        clear_root_ca: bool,
+    ) -> TargetVerificationMaterial:
         normalized_fqdn = _normalize_fqdn(fqdn)
         normalized_name = name.strip()
         if not normalized_name:
@@ -1134,7 +1353,8 @@ class RuntimeRepository:
         if root_ca_pem is not None and normalized_ca is None:
             raise ValueError("the uploaded root CA bundle is empty")
 
-        with self._write_transaction() as connection:
+        with self._lock:
+            connection = self._connection_or_raise()
             row = connection.execute(
                 "SELECT * FROM targets WHERE id = ?", (str(target_id),)
             ).fetchone()
@@ -1144,67 +1364,82 @@ class RuntimeRepository:
             if previous != expected_generation:
                 raise RuntimeStoreUnavailable("target configuration generation changed")
             current = ConfigurationGeneration(int(previous) + 1)
-            username_envelope = row["username_envelope"]
-            password_envelope = row["password_envelope"]
-            root_ca_envelope = row["root_ca_envelope"]
             if row["unusable_reason"] is not None and (not username or not password):
                 raise ValueError(
                     "an integrity-failed target requires both credentials to recover"
                 )
-            if username:
-                username_envelope = self._encrypt(target_id, "username", username)
-            if password:
-                password_envelope = self._encrypt(target_id, "password", password)
+            selected_username = username or self._decrypt(
+                target_id, "username", row["username_envelope"]
+            )
+            selected_password = password or self._decrypt(
+                target_id, "password", row["password_envelope"]
+            )
             if clear_root_ca:
-                root_ca_envelope = None
+                selected_root_ca = None
             elif normalized_ca is not None:
-                root_ca_envelope = self._encrypt(target_id, "root_ca", normalized_ca)
-            if row["unusable_reason"] is not None:
+                selected_root_ca = normalized_ca
+            elif row["root_ca_envelope"] is None:
+                selected_root_ca = None
+            else:
                 try:
-                    self._decrypt(target_id, "username", username_envelope)
-                    self._decrypt(target_id, "password", password_envelope)
-                    if root_ca_envelope is not None:
-                        self._decrypt(target_id, "root_ca", root_ca_envelope)
+                    selected_root_ca = self._decrypt(
+                        target_id, "root_ca", row["root_ca_envelope"]
+                    )
                 except RuntimeStoreUnavailable as exc:
                     raise ValueError(
                         "target remains quarantined: the stored root CA must be"
                         " replaced or removed"
                     ) from exc
             is_prod = normalized_fqdn == PRODUCTION_FQDN
-            try:
-                connection.execute(
-                    """
-                    UPDATE targets SET name = ?, fqdn = ?, posture = ?,
-                        is_prod = ?, verify_ssl = ?, auth_source = ?,
-                        configuration_generation = ?, username_envelope = ?,
-                        password_envelope = ?, root_ca_envelope = ?
-                        , unusable_reason = NULL, auth_failure_count = 0,
-                        auth_locked = 0
-                    WHERE id = ?
-                    """,
-                    (
-                        normalized_name,
-                        normalized_fqdn,
-                        posture.value,
-                        int(is_prod),
-                        int(verify_ssl),
-                        normalized_source,
-                        int(current),
-                        username_envelope,
-                        password_envelope,
-                        root_ca_envelope,
-                        str(target_id),
+            return TargetVerificationMaterial(
+                target=TargetRecord(
+                    id=target_id,
+                    name=normalized_name,
+                    fqdn=normalized_fqdn,
+                    posture=posture,
+                    is_prod=is_prod,
+                    verify_ssl=verify_ssl,
+                    auth_source=normalized_source,
+                    configuration_generation=current,
+                    backend=BackendKind(row["backend"]),
+                    has_custom_ca=selected_root_ca is not None,
+                    last_verified_at=(
+                        None
+                        if row["last_verified_at"] is None
+                        else datetime.fromisoformat(row["last_verified_at"])
                     ),
-                )
-                connection.commit()
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("a target with this FQDN already exists") from exc
-            stored = self._target_from_row(
+                ),
+                credentials=TargetCredentials(
+                    selected_username, selected_password, normalized_source
+                ),
+                target_root_ca_pem=selected_root_ca,
+            )
+
+    def _mark_target_verified_sync(
+        self,
+        target_id: TargetId,
+        expected_generation: ConfigurationGeneration,
+        verified_at: datetime,
+    ) -> TargetRecord:
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT configuration_generation FROM targets WHERE id = ?",
+                (str(target_id),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown target: {target_id}")
+            if ConfigurationGeneration(row[0]) != expected_generation:
+                raise RuntimeStoreUnavailable("target configuration generation changed")
+            connection.execute(
+                "UPDATE targets SET last_verified_at = ? WHERE id = ?",
+                (verified_at.isoformat(), str(target_id)),
+            )
+            connection.commit()
+            return self._target_from_row(
                 connection.execute(
                     "SELECT * FROM targets WHERE id = ?", (str(target_id),)
                 ).fetchone()
             )
-            return stored, TargetConfigurationChange(target_id, previous, current)
 
     def _save_sync(
         self,
@@ -1827,6 +2062,11 @@ class RuntimeRepository:
             unusable_reason=row["unusable_reason"],
             auth_failure_count=int(row["auth_failure_count"]),
             auth_locked=bool(row["auth_locked"]),
+            last_verified_at=(
+                None
+                if row["last_verified_at"] is None
+                else datetime.fromisoformat(row["last_verified_at"])
+            ),
         )
 
     def _encrypt(self, target_id: TargetId, purpose: str, value: str) -> str:

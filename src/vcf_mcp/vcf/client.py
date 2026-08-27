@@ -27,6 +27,7 @@ Measured behaviors this implementation is built on, all against
 from __future__ import annotations
 
 import asyncio
+import socket
 import ssl
 import time
 from collections.abc import Callable, Mapping
@@ -50,10 +51,11 @@ from vcf_mcp.vcf.errors import (
     ReauthenticationExhausted,
     TargetConfigurationSuperseded,
     TlsVerificationError,
+    UpstreamConnectionError,
     UpstreamProtocolError,
+    UpstreamResolutionError,
     UpstreamStatusError,
     UpstreamTimeoutError,
-    UpstreamUnavailableError,
 )
 from vcf_mcp.vcf.outbound import (
     OutboundAllowlist,
@@ -422,22 +424,7 @@ class VcfTargetClient:
         return bytes(buffered)
 
     def _transport_error(self, exc: httpx.HTTPError, path: str) -> Exception:
-        if isinstance(exc, httpx.TimeoutException):
-            return UpstreamTimeoutError(
-                f"the target did not answer within the configured timeout "
-                f"({type(exc).__name__})",
-                target_id=self._target.id,
-            )
-        if _is_certificate_failure(exc):
-            return TlsVerificationError(
-                "the target's certificate failed verification for this "
-                "target's TLS policy",
-                target_id=self._target.id,
-            )
-        return UpstreamUnavailableError(
-            f"the target could not be reached ({type(exc).__name__})",
-            target_id=self._target.id,
-        )
+        return classify_transport_error(exc, target_id=self._target.id)
 
     def _decode(self, response: httpx.Response, path: str) -> JsonObject:
         """Decode a JSON object body, never assuming the body is JSON.
@@ -578,11 +565,60 @@ def _rebuffered_headers(headers: httpx.Headers) -> httpx.Headers:
     return rebuilt
 
 
-def _is_certificate_failure(exc: httpx.HTTPError) -> bool:
+def classify_transport_error(
+    exc: httpx.HTTPError, *, target_id: TargetId
+) -> Exception:
+    """Preserve the operational cause of a failed outbound connection."""
+
+    if isinstance(exc, httpx.TimeoutException):
+        return UpstreamTimeoutError(
+            f"the target did not answer within the configured timeout "
+            f"({type(exc).__name__})",
+            target_id=target_id,
+        )
+    if _exception_chain_matches(
+        exc,
+        lambda item: (
+            isinstance(item, ssl.SSLCertVerificationError)
+            or "CERTIFICATE_VERIFY_FAILED" in str(item)
+            or "SSLCertVerificationError" in str(item)
+        ),
+    ):
+        return TlsVerificationError(
+            "the target's certificate failed verification for this "
+            "target's TLS policy",
+            target_id=target_id,
+        )
+    resolution_markers = (
+        "name or service not known",
+        "temporary failure in name resolution",
+        "getaddrinfo failed",
+        "nodename nor servname provided",
+        "no address associated with hostname",
+    )
+    if _exception_chain_matches(
+        exc,
+        lambda item: (
+            isinstance(item, socket.gaierror)
+            or any(marker in str(item).lower() for marker in resolution_markers)
+        ),
+    ):
+        return UpstreamResolutionError(
+            "the target hostname could not be resolved",
+            target_id=target_id,
+        )
+    return UpstreamConnectionError(
+        f"the target could not be connected to ({type(exc).__name__})",
+        target_id=target_id,
+    )
+
+
+def _exception_chain_matches(
+    exc: BaseException, predicate: Callable[[BaseException], bool]
+) -> bool:
     seen: object = exc
     for _ in range(5):
-        text = str(seen)
-        if "CERTIFICATE_VERIFY_FAILED" in text or "SSLCertVerificationError" in text:
+        if isinstance(seen, BaseException) and predicate(seen):
             return True
         cause = getattr(seen, "__cause__", None) or getattr(seen, "__context__", None)
         if cause is None:

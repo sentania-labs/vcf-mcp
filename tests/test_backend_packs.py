@@ -88,6 +88,14 @@ def test_all_nine_builtin_products_ship_exactly_nineteen_tools() -> None:
 
     assert len(packs) == 9
     assert all(len(pack.tools) == 19 for pack in packs.values())
+    for pack in packs.values():
+        probe = next(
+            tool for tool in pack.tools if tool.name == pack.verification_probe.tool
+        )
+        assert probe.method == "GET"
+        assert not {
+            argument.name for argument in probe.arguments if argument.required
+        } - set(pack.verification_probe.arguments)
 
 
 def test_vcenter_pack_freezes_nineteen_distinct_official_get_contracts() -> None:
@@ -184,7 +192,7 @@ def test_every_builtin_file_is_consumed_by_the_validated_loader() -> None:
 
 def _operator_pack(backend: BackendKind) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "id": f"fixture.{backend.value}",
         "version": "1.0.0",
         "backend": backend.value,
@@ -195,6 +203,7 @@ def _operator_pack(backend: BackendKind) -> dict[str, object]:
         "source": "operator-supplied fixture",
         "source_kind": "operator",
         "unsigned": True,
+        "verification_probe": {"tool": "get_fixture_0", "arguments": {}},
         "projection_keys": ["id", "name", "items", "count"],
         "tools": [
             {

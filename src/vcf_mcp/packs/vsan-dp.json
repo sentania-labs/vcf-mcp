@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.vsan-dp.read",
   "version": "0.2.0",
   "backend": "vsan-dp",
@@ -7,6 +7,7 @@
   "product": "vSAN Data Protection",
   "auth_scheme": "vcenter_session",
   "api_root": "/api",
+  "verification_probe": {"tool": "get_vsan_snapshot_service_info", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/vsan-data-protection/vsan-data-protection-openapi.yaml, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

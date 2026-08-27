@@ -38,6 +38,11 @@ from vcf_mcp.runtime_repository import (
     RuntimeStoreUnavailable,
     global_ca_target_digest,
 )
+from vcf_mcp.target_verification import (
+    TargetVerificationError,
+    TargetVerificationUnavailable,
+    TargetVerifier,
+)
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
@@ -83,6 +88,23 @@ def _pack_manager(request: Request) -> PackTrustManager:
     if not isinstance(manager, PackTrustManager):
         raise RepositoryUnavailable("backend pack trust manager is unavailable")
     return manager
+
+
+def _target_verifier(request: Request) -> TargetVerifier:
+    verifier = getattr(request.app.state, "target_verifier", None)
+    if not isinstance(verifier, TargetVerifier):
+        raise RepositoryUnavailable("target verifier is unavailable")
+    return verifier
+
+
+async def _verification_root_ca(
+    repository: RuntimeRepository, target_root_ca_pem: str | None
+) -> str | None:
+    """Assemble the same additive trust bundle used by live target calls."""
+
+    global_root_ca = await repository.get_global_root_ca()
+    parts = tuple(value for value in (global_root_ca, target_root_ca_pem) if value)
+    return "".join(parts) or None
 
 
 def _degraded_to_503(endpoint):
@@ -270,19 +292,37 @@ async def post_target_register(request: Request):
         )
     try:
         root_ca = await _uploaded_text(form.get("root_ca"))
-        await _repository(request).create_target(
-            name=str(form.get("name", "")),
-            fqdn=str(form.get("fqdn", "")),
-            username=str(form.get("username", "")),
-            password=str(form.get("password", "")),
-            auth_source=str(form.get("auth_source", "LOCAL")),
-            verify_ssl=form.get("verify_ssl") == "on",
-            backend=str(form.get("backend", BackendKind.OPS.value)),
-            root_ca_pem=root_ca,
+        repository = _repository(request)
+        submitted = {
+            "name": str(form.get("name", "")),
+            "fqdn": str(form.get("fqdn", "")),
+            "username": str(form.get("username", "")),
+            "password": str(form.get("password", "")),
+            "auth_source": str(form.get("auth_source", "LOCAL")),
+            "verify_ssl": form.get("verify_ssl") == "on",
+            "backend": str(form.get("backend", BackendKind.OPS.value)),
+            "root_ca_pem": root_ca,
+        }
+        material = await repository.prepare_target_registration(**submitted)
+        verified_at = await _target_verifier(request).verify(
+            target=material.target,
+            credentials=material.credentials,
+            root_ca_pem=await _verification_root_ca(
+                repository, material.target_root_ca_pem
+            ),
         )
-    except ValueError as exc:
+        await repository.create_target(
+            **submitted,
+            target_id=material.target.id,
+            last_verified_at=verified_at,
+        )
+    except (TargetVerificationError, ValueError) as exc:
         return await _dashboard_response(
             request, error=str(exc), status_code=400, active_tab="targets"
+        )
+    except TargetVerificationUnavailable as exc:
+        return await _dashboard_response(
+            request, error=str(exc), status_code=503, active_tab="targets"
         )
     auth.rotate_session(request)
     return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
@@ -316,20 +356,33 @@ async def post_target_update(request: Request):
     try:
         uploaded_ca = await _uploaded_text(form.get("root_ca"))
         clear_root_ca = form.get("clear_root_ca") == "on"
-        updated, change = await repository.update_target(
-            target_id=target_id,
-            expected_generation=ConfigurationGeneration(
-                int(str(form.get("configuration_generation", "0")))
+        expected_generation = ConfigurationGeneration(
+            int(str(form.get("configuration_generation", "0")))
+        )
+        submitted = {
+            "target_id": target_id,
+            "expected_generation": expected_generation,
+            "name": str(form.get("name", "")),
+            "fqdn": str(form.get("fqdn", "")),
+            "username": str(form.get("username", "")) or None,
+            "password": str(form.get("password", "")) or None,
+            "auth_source": str(form.get("auth_source", "LOCAL")),
+            "verify_ssl": form.get("verify_ssl") == "on",
+            "posture": TargetPosture(str(form.get("posture", "read_only"))),
+            "root_ca_pem": uploaded_ca,
+            "clear_root_ca": clear_root_ca,
+        }
+        material = await repository.prepare_target_update(**submitted)
+        verified_at = await _target_verifier(request).verify(
+            target=material.target,
+            credentials=material.credentials,
+            root_ca_pem=await _verification_root_ca(
+                repository, material.target_root_ca_pem
             ),
-            name=str(form.get("name", "")),
-            fqdn=str(form.get("fqdn", "")),
-            username=str(form.get("username", "")) or None,
-            password=str(form.get("password", "")) or None,
-            auth_source=str(form.get("auth_source", "LOCAL")),
-            verify_ssl=form.get("verify_ssl") == "on",
-            posture=TargetPosture(str(form.get("posture", "read_only"))),
-            root_ca_pem=uploaded_ca,
-            clear_root_ca=clear_root_ca,
+        )
+        updated, change = await repository.update_target(
+            **submitted,
+            last_verified_at=verified_at,
         )
         mode = invalidation_mode_for_change(previous, updated)
         if uploaded_ca is not None or clear_root_ca:
@@ -337,7 +390,58 @@ async def post_target_update(request: Request):
         invalidator = getattr(request.app.state, "target_invalidator", None)
         if invalidator is not None:
             await invalidator.invalidate(change, mode=mode)
-    except (ValueError, RuntimeError) as exc:
+    except TargetVerificationUnavailable as exc:
+        return await _dashboard_response(
+            request, error=str(exc), status_code=503, active_tab="targets"
+        )
+    except (TargetVerificationError, ValueError, RuntimeError) as exc:
+        return await _dashboard_response(
+            request, error=str(exc), status_code=400, active_tab="targets"
+        )
+    auth.rotate_session(request)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
+
+
+async def post_target_verify(request: Request):
+    target_id = TargetId(request.path_params["target_id"])
+    repository = _repository(request)
+    target = await repository.get(target_id)
+    if target is None:
+        return await _dashboard_response(
+            request,
+            error="Target does not exist.",
+            status_code=404,
+            active_tab="targets",
+        )
+    try:
+        material = await repository.prepare_target_update(
+            target_id=target.id,
+            expected_generation=target.configuration_generation,
+            name=target.name,
+            fqdn=target.fqdn,
+            username=None,
+            password=None,
+            auth_source=target.auth_source,
+            verify_ssl=target.verify_ssl,
+            posture=target.posture,
+        )
+        verified_at = await _target_verifier(request).verify(
+            target=material.target,
+            credentials=material.credentials,
+            root_ca_pem=await _verification_root_ca(
+                repository, material.target_root_ca_pem
+            ),
+        )
+        await repository.mark_target_verified(
+            target.id,
+            expected_generation=target.configuration_generation,
+            verified_at=verified_at,
+        )
+    except TargetVerificationUnavailable as exc:
+        return await _dashboard_response(
+            request, error=str(exc), status_code=503, active_tab="targets"
+        )
+    except (TargetVerificationError, ValueError, RuntimeError) as exc:
         return await _dashboard_response(
             request, error=str(exc), status_code=400, active_tab="targets"
         )
@@ -965,6 +1069,13 @@ admin_routes = [
         "/admin/targets/{target_id}",
         endpoint=_degraded_to_503(
             _recent_reauth_post(post_target_update, tab="targets")
+        ),
+        methods=["POST"],
+    ),
+    Route(
+        "/admin/targets/{target_id}/verify",
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_target_verify, tab="targets")
         ),
         methods=["POST"],
     ),
