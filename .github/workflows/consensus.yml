@@ -28,7 +28,7 @@ jobs:
     runs-on: lab
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # AGENTS.md is generated from CLAUDE.md. This is the check that makes
       # "the two files can never drift" true rather than aspirational: a hand
@@ -66,7 +66,7 @@ jobs:
     runs-on: lab
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The gate diffs the PR against its merge base, so it needs history
           # rather than the default single-commit checkout.
