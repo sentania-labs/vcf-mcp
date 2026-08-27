@@ -1286,8 +1286,7 @@ class RuntimeRepository:
                         is_prod = ?, verify_ssl = ?, auth_source = ?,
                         configuration_generation = ?, username_envelope = ?,
                         password_envelope = ?, root_ca_envelope = ?,
-                        unusable_reason = NULL, auth_failure_count = 0,
-                        auth_locked = 0, last_verified_at = ?
+                        unusable_reason = NULL, last_verified_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -1363,6 +1362,10 @@ class RuntimeRepository:
             previous = ConfigurationGeneration(row["configuration_generation"])
             if previous != expected_generation:
                 raise RuntimeStoreUnavailable("target configuration generation changed")
+            if row["auth_locked"]:
+                raise RuntimeStoreUnavailable(
+                    "target authentication is locked pending operator reset"
+                )
             current = ConfigurationGeneration(int(previous) + 1)
             if row["unusable_reason"] is not None and (not username or not password):
                 raise ValueError(
