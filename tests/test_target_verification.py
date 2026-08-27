@@ -26,6 +26,18 @@ from vcf_mcp.runtime_repository import RuntimeRepository
 from vcf_mcp.target_verification import TargetVerifier
 
 
+class _StreamingTimeout(httpx.AsyncByteStream):
+    def __init__(self, request: httpx.Request) -> None:
+        self._request = request
+
+    async def __aiter__(self):
+        yield b'{"items":'
+        raise httpx.ReadTimeout(
+            "fixture response body stalled",
+            request=self._request,
+        )
+
+
 def _synthetic_ca_pem(common_name: str) -> str:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
@@ -76,6 +88,10 @@ def _verifier(
             if outcome == "credential_rejected":
                 return httpx.Response(401, json={"message": "fixture refusal"})
             return httpx.Response(200, json={"token": "fixture-token"})
+        if request.method == "POST" and request.url.path.endswith("/auth/token/release"):
+            return httpx.Response(200)
+        if outcome == "stream_timeout":
+            return httpx.Response(200, stream=_StreamingTimeout(request))
         if outcome == "unexpected_response":
             return httpx.Response(502, json={"message": "fixture upstream error"})
         return httpx.Response(200, json={"items": []})
@@ -320,6 +336,42 @@ def test_verification_timeout_is_bounded_and_visible(tmp_path: Path) -> None:
         terminal = asyncio.run(audit.recent_records(limit=1))[0]
         assert terminal.status is AuditStatus.TIMEOUT
         assert terminal.error_code == "target_verification_timeout"
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_streaming_timeout_is_classified_and_terminally_audited(tmp_path: Path) -> None:
+    runtime, audit = _runtime_and_audit(tmp_path)
+    app = create_app(
+        audit_repository=audit,
+        target_verifier=_verifier(audit, "stream_timeout", timeout_seconds=1.0),
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            response = client.post(
+                "/admin/targets",
+                data={
+                    "csrf_token": _login_and_csrf(client),
+                    "backend": BackendKind.OPS.value,
+                    "name": "fixture",
+                    "fqdn": "fixture.example.internal",
+                    "username": "synthetic-reader",
+                    "password": "synthetic-password",
+                    "auth_source": "LOCAL",
+                },
+            )
+        assert response.status_code == 400
+        assert "timed out after 1 seconds" in response.text
+        assert asyncio.run(runtime.list()) == ()
+        records = asyncio.run(audit.recent_records(limit=2))
+        assert len(records) == 2
+        assert records[0].status is AuditStatus.TIMEOUT
+        assert records[0].error_code == "target_verification_timeout"
+        assert records[1].status is AuditStatus.ATTEMPT
     finally:
         runtime.close()
         audit.close()

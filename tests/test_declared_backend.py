@@ -407,6 +407,37 @@ async def test_ops_bearer_releases_rejected_and_shutdown_tokens() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ops_token_is_released_on_shutdown() -> None:
+    pack = load_backend_packs()[BackendKind.OPS]
+    released_tokens: list[str] = []
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token/acquire"):
+            return httpx.Response(200, json={"token": "ops-token"})
+        if request.url.path.endswith("/token/release"):
+            released_tokens.append(request.headers["authorization"])
+            return httpx.Response(200)
+        assert request.url.path == "/suite-api/api/adapterkinds"
+        return httpx.Response(200, json={"items": []})
+
+    client = DeclaredBackendClient(
+        target=target(BackendKind.OPS),
+        credentials=TargetCredentials("synthetic-user", "synthetic-password"),
+        pack=pack,
+        http_client=httpx.AsyncClient(
+            base_url="https://ops.example.internal",
+            transport=httpx.MockTransport(appliance),
+        ),
+    )
+    try:
+        assert await client.request_declared("list_adapter_kinds", {}) == {"items": []}
+    finally:
+        await client.aclose()
+
+    assert released_tokens == ["OpsToken ops-token"]
+
+
+@pytest.mark.asyncio
 async def test_vsan_session_header_shape_is_fixture_proven() -> None:
     pack = load_backend_packs()[BackendKind.VSAN_DP]
     session_deleted = False
