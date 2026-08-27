@@ -8,13 +8,21 @@ RELEASE_WORKFLOW = WORKFLOW_DIR / "release.yml"
 PACK_RELEASE_WORKFLOW = WORKFLOW_DIR / "release-packs.yml"
 
 
+def _workflow_files() -> list[Path]:
+    return sorted(
+        path
+        for path in WORKFLOW_DIR.iterdir()
+        if path.is_file() and path.suffix in (".yml", ".yaml")
+    )
+
+
 def test_every_workflow_action_is_pinned_with_a_readable_version() -> None:
     action = re.compile(
         r"^\s*-?\s*uses:\s+[^\s@]+@[0-9a-f]{40}\s+#\s+v\d+(?:\.\d+){0,2}\s*$"
     )
     uses_lines = [
         (workflow, line)
-        for workflow in WORKFLOW_DIR.glob("*.yml")
+        for workflow in _workflow_files()
         for line in workflow.read_text().splitlines()
         if re.match(r"^\s*-?\s*uses:", line)
     ]
@@ -31,7 +39,7 @@ def test_setup_python_does_not_require_runner_local_pip_cache() -> None:
     )[0]
     assert "cache:" not in setup_python
     assert (
-        "actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0"
+        "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0"
         in setup_python
     )
     assert 'PIP_DEFAULT_TIMEOUT: "300"' in setup_python
@@ -79,8 +87,8 @@ def test_image_builds_use_the_shared_remote_buildkit() -> None:
             "- name: Login to GitHub Container Registry", 1
         )[0]
         assert (
-            "docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2"
-            " # v3.10.0" in setup_buildx
+            "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f"
+            " # v3.12.0" in setup_buildx
         )
         assert "driver: remote" in setup_buildx
         assert (
@@ -88,8 +96,8 @@ def test_image_builds_use_the_shared_remote_buildkit() -> None:
             in setup_buildx
         )
         assert (
-            "docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497"
-            " # v6.14.0" in text
+            "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8"
+            " # v6.19.2" in text
         )
 
 
@@ -116,7 +124,7 @@ def test_only_the_outside_cluster_smoke_job_uses_github_hosted_runner() -> None:
     release_text = RELEASE_WORKFLOW.read_text()
     assert release_text.count("runs-on: ubuntu-latest") == 1
 
-    for workflow in WORKFLOW_DIR.glob("*.yml"):
+    for workflow in _workflow_files():
         for line in workflow.read_text().splitlines():
             if line.strip().startswith("runs-on:"):
                 assert line.strip() in ("runs-on: lab", "runs-on: ubuntu-latest"), workflow

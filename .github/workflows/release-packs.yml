@@ -31,7 +31,7 @@ jobs:
       reference: ${{ steps.publish.outputs.reference }}
       expected-sha256: ${{ steps.publish.outputs.expected-sha256 }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned OCI tools
         shell: bash
         run: |
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install appliance runtime
         shell: bash
         run: python -m pip install --disable-pip-version-check .
@@ -235,7 +235,7 @@ jobs:
       published: ${{ steps.publish.outputs.published }}
       legacy-feed: ${{ steps.legacy.outputs.enabled }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned OCI tools
         shell: bash
         run: |
