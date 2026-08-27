@@ -313,11 +313,11 @@ def test_verification_timeout_is_bounded_and_visible(tmp_path: Path) -> None:
                 },
             )
         assert response.status_code == 400
-        assert "limited to 0.2 seconds" in response.text
+        assert "timed out after 0.2 seconds" in response.text
         assert asyncio.run(runtime.list()) == ()
         terminal = asyncio.run(audit.recent_records(limit=1))[0]
         assert terminal.status is AuditStatus.TIMEOUT
-        assert terminal.error_code == "target_verification_cannot_connect"
+        assert terminal.error_code == "target_verification_timeout"
     finally:
         runtime.close()
         audit.close()

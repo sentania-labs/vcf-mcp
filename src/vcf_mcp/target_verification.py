@@ -45,6 +45,7 @@ VERIFICATION_PROJECTION = "target-verification-v1"
 class VerificationFailureCause(StrEnum):
     CANNOT_RESOLVE = "cannot_resolve"
     CANNOT_CONNECT = "cannot_connect"
+    TIMEOUT = "timeout"
     CERTIFICATE_NOT_TRUSTED = "certificate_not_trusted"
     CREDENTIAL_REJECTED = "credential_rejected"
     UNEXPECTED_RESPONSE = "unexpected_response"
@@ -57,8 +58,12 @@ _FAILURE_MESSAGES = {
     ),
     VerificationFailureCause.CANNOT_CONNECT: (
         "Cannot connect to the backend. Nothing was saved. Check routing, "
-        "firewall policy, service availability, and retry. Verification is "
-        "limited to {timeout_seconds} seconds."
+        "firewall policy, service availability, and retry."
+    ),
+    VerificationFailureCause.TIMEOUT: (
+        "Backend verification timed out after {timeout_seconds} seconds. "
+        "Nothing was saved. Check backend responsiveness and the network path, "
+        "then retry."
     ),
     VerificationFailureCause.CERTIFICATE_NOT_TRUSTED: (
         "The backend certificate is not trusted. Nothing was saved. Install "
@@ -174,7 +179,7 @@ class TargetVerifier:
                     await client.aclose()
         except TimeoutError:
             failure = TargetVerificationError(
-                VerificationFailureCause.CANNOT_CONNECT,
+                VerificationFailureCause.TIMEOUT,
                 timeout_seconds=self._timeout_seconds,
             )
             audit_status = AuditStatus.TIMEOUT
@@ -226,7 +231,9 @@ def _operator_failure(
         cause = VerificationFailureCause.CREDENTIAL_REJECTED
     elif isinstance(exc, UpstreamResolutionError):
         cause = VerificationFailureCause.CANNOT_RESOLVE
-    elif isinstance(exc, (UpstreamConnectionError, UpstreamTimeoutError)):
+    elif isinstance(exc, UpstreamTimeoutError):
+        cause = VerificationFailureCause.TIMEOUT
+    elif isinstance(exc, UpstreamConnectionError):
         cause = VerificationFailureCause.CANNOT_CONNECT
     elif isinstance(exc, TlsVerificationError):
         cause = VerificationFailureCause.CERTIFICATE_NOT_TRUSTED
