@@ -4,6 +4,7 @@ import asyncio
 import re
 import socket
 import ssl
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -318,6 +319,46 @@ def test_verification_timeout_is_bounded_and_visible(tmp_path: Path) -> None:
         terminal = asyncio.run(audit.recent_records(limit=1))[0]
         assert terminal.status is AuditStatus.TIMEOUT
         assert terminal.error_code == "target_verification_timeout"
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_verification_deadline_includes_required_audit_commits(tmp_path: Path) -> None:
+    runtime, audit = _runtime_and_audit(tmp_path)
+
+    class DelayedAudit:
+        async def append_committed(self, record) -> None:
+            await asyncio.sleep(0.12)
+            await audit.append_committed(record)
+
+    app = create_app(
+        audit_repository=audit,
+        target_verifier=_verifier(DelayedAudit(), "success"),
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            started = time.monotonic()
+            response = client.post(
+                "/admin/targets",
+                data={
+                    "csrf_token": _login_and_csrf(client),
+                    "backend": BackendKind.OPS.value,
+                    "name": "fixture",
+                    "fqdn": "fixture.example.internal",
+                    "username": "synthetic-reader",
+                    "password": "synthetic-password",
+                    "auth_source": "LOCAL",
+                },
+            )
+            elapsed = time.monotonic() - started
+        assert response.status_code == 503
+        assert "audit is unavailable" in response.text
+        assert elapsed < 0.5
+        assert asyncio.run(runtime.list()) == ()
     finally:
         runtime.close()
         audit.close()
