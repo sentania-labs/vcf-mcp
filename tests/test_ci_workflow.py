@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -7,13 +8,32 @@ RELEASE_WORKFLOW = WORKFLOW_DIR / "release.yml"
 PACK_RELEASE_WORKFLOW = WORKFLOW_DIR / "release-packs.yml"
 
 
+def test_every_workflow_action_is_pinned_with_a_readable_version() -> None:
+    action = re.compile(
+        r"^\s*-?\s*uses:\s+[^\s@]+@[0-9a-f]{40}\s+#\s+v\d+(?:\.\d+){0,2}\s*$"
+    )
+    uses_lines = [
+        (workflow, line)
+        for workflow in WORKFLOW_DIR.glob("*.yml")
+        for line in workflow.read_text().splitlines()
+        if re.match(r"^\s*-?\s*uses:", line)
+    ]
+
+    assert uses_lines
+    for workflow, line in uses_lines:
+        assert action.match(line), f"{workflow}: {line.strip()}"
+
+
 def test_setup_python_does_not_require_runner_local_pip_cache() -> None:
     text = BUILD_WORKFLOW.read_text()
     setup_python = text.split("- name: Set up Python", 1)[1].split(
         "- name: Install dependencies", 1
     )[0]
     assert "cache:" not in setup_python
-    assert "actions/setup-python@v5" in setup_python
+    assert (
+        "actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0"
+        in setup_python
+    )
     assert 'PIP_DEFAULT_TIMEOUT: "300"' in setup_python
     assert "python -m pip install -e '.[test]'" in text
 
@@ -58,13 +78,19 @@ def test_image_builds_use_the_shared_remote_buildkit() -> None:
         setup_buildx = text.split("- name: Set up Docker Buildx", 1)[1].split(
             "- name: Login to GitHub Container Registry", 1
         )[0]
-        assert "docker/setup-buildx-action@v3" in setup_buildx
+        assert (
+            "docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2"
+            " # v3.10.0" in setup_buildx
+        )
         assert "driver: remote" in setup_buildx
         assert (
             "endpoint: tcp://buildkitd.buildkit.svc.cluster.local:1234"
             in setup_buildx
         )
-        assert "docker/build-push-action@v6" in text
+        assert (
+            "docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497"
+            " # v6.14.0" in text
+        )
 
 
 def test_smoke_job_pulls_and_runs_without_registry_credentials() -> None:
