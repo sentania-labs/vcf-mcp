@@ -20,6 +20,7 @@ from vcf_mcp.vcf.client import (
     TOKEN_RELEASE_TIMEOUT,
     TargetCredentials,
     build_tls_verifier,
+    classify_transport_error,
 )
 from vcf_mcp.vcf.errors import (
     AuthenticationError,
@@ -29,7 +30,6 @@ from vcf_mcp.vcf.errors import (
     TargetConfigurationSuperseded,
     UpstreamProtocolError,
     UpstreamStatusError,
-    UpstreamUnavailableError,
 )
 from vcf_mcp.vcf.outbound import _SAFE_PATH_VALUE
 from vcf_mcp.upstream_control import UpstreamControl
@@ -205,11 +205,11 @@ class DeclaredBackendClient:
                 return
             previous = self._auth_value
             self._auth_value = None
-            if previous and self._pack.auth_scheme == "ops_bearer":
-                await self._release_ops_bearer(previous)
+            if previous and self._pack.auth_scheme in {"ops_bearer", "ops_token"}:
+                await self._release_ops_token(previous)
             await self._acquire_locked()
 
-    async def _release_ops_bearer(self, token: str) -> None:
+    async def _release_ops_token(self, token: str) -> None:
         try:
             await self._http.post(
                 OPS_TOKEN_RELEASE_PATH,
@@ -293,9 +293,8 @@ class DeclaredBackendClient:
             try:
                 response = await send()
             except httpx.HTTPError as exc:
-                raise UpstreamUnavailableError(
-                    f"{self._pack.product} could not be reached ({type(exc).__name__})",
-                    target_id=self._target.id,
+                raise classify_transport_error(
+                    exc, target_id=self._target.id
                 ) from None
             if response.status_code != 429 or not await self._upstream_control.backoff_for_429(
                 attempt=attempt,
@@ -326,10 +325,7 @@ class DeclaredBackendClient:
                 request = next(auth.sync_auth_flow(request))
             response = await self._http.send(request, stream=True)
         except httpx.HTTPError as exc:
-            raise UpstreamUnavailableError(
-                f"{self._pack.product} could not be reached ({type(exc).__name__})",
-                target_id=self._target.id,
-            ) from None
+            raise classify_transport_error(exc, target_id=self._target.id) from None
         buffered = bytearray()
         try:
             async for chunk in response.aiter_bytes():
@@ -342,6 +338,8 @@ class DeclaredBackendClient:
                         unit="bytes",
                         target_id=self._target.id,
                     )
+        except httpx.HTTPError as exc:
+            raise classify_transport_error(exc, target_id=self._target.id) from None
         finally:
             await response.aclose()
         rebuilt_headers = httpx.Headers(response.headers)
@@ -389,9 +387,9 @@ class DeclaredBackendClient:
                 )
             except httpx.HTTPError:
                 pass
-        elif session and self._pack.auth_scheme == "ops_bearer":
+        elif session and self._pack.auth_scheme in {"ops_bearer", "ops_token"}:
             try:
-                await self._release_ops_bearer(session)
+                await self._release_ops_token(session)
             except asyncio.CancelledError:
                 pass
         await self._http.aclose()

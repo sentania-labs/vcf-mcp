@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.sddc-lcm.read",
   "version": "0.2.0",
   "backend": "sddc-lcm",
@@ -7,6 +7,7 @@
   "product": "VCF SDDC Lifecycle",
   "auth_scheme": "bearer_token",
   "api_root": "/sddc-lcm",
+  "verification_probe": {"tool": "get_sddc_lcm_health", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/sddc-lcm/sddc-lcm-openapi.yaml, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

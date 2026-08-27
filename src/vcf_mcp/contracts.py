@@ -91,6 +91,7 @@ class TargetRecord:
     unusable_reason: str | None = None
     auth_failure_count: int = 0
     auth_locked: bool = False
+    last_verified_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

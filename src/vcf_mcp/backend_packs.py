@@ -90,6 +90,14 @@ class PackTool:
 
 
 @dataclass(frozen=True, slots=True)
+class PackVerificationProbe:
+    """Cheapest read-only request a pack offers for credential verification."""
+
+    tool: str
+    arguments: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class BackendPack:
     pack_id: str
     version: str
@@ -101,6 +109,7 @@ class BackendPack:
     source: str
     unsigned: bool
     tools: tuple[PackTool, ...]
+    verification_probe: PackVerificationProbe
     caps: dict[str, int]
     projection_keys: frozenset[str]
     digest: str
@@ -152,7 +161,7 @@ def _load_pack_directory(
         raw = pack_path.read_bytes()
         try:
             document = json.loads(raw)
-            if document.get("schema_version") != 1:
+            if document.get("schema_version") != 2:
                 raise ValueError("unsupported pack schema version")
             backend = BackendKind(document["backend"])
             auth_scheme = str(document["auth_scheme"])
@@ -171,6 +180,38 @@ def _load_pack_directory(
             if len(tools) < MINIMUM_TOOL_COUNT:
                 raise ValueError(
                     f"backend packs require at least {MINIMUM_TOOL_COUNT} tools"
+                )
+            probe_document = document["verification_probe"]
+            probe = PackVerificationProbe(
+                tool=str(probe_document["tool"]),
+                arguments={
+                    str(key): value
+                    for key, value in probe_document.get("arguments", {}).items()
+                },
+            )
+            probe_tool = next(
+                (tool for tool in tools if tool.name == probe.tool), None
+            )
+            if probe_tool is None:
+                raise ValueError("verification probe must name a declared tool")
+            if probe_tool.method is not HttpMethod.GET:
+                raise ValueError("verification probe must use a read-only GET tool")
+            expected_arguments = {
+                argument.name for argument in probe_tool.arguments
+            }
+            required_arguments = {
+                argument.name
+                for argument in probe_tool.arguments
+                if argument.required
+            }
+            supplied_arguments = set(probe.arguments)
+            if not required_arguments.issubset(supplied_arguments):
+                raise ValueError(
+                    "verification probe is missing required tool arguments"
+                )
+            if not supplied_arguments.issubset(expected_arguments):
+                raise ValueError(
+                    "verification probe arguments exceed the declared tool schema"
                 )
             endpoint = str(document["endpoint"])
             if endpoint != backend.value:
@@ -202,6 +243,7 @@ def _load_pack_directory(
                     else bool(document.get("unsigned", True))
                 ),
                 tools=tools,
+                verification_probe=probe,
                 caps={
                     str(key): int(value)
                     for key, value in document.get("caps", {}).items()

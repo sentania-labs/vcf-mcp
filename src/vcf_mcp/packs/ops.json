@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.ops.read",
   "version": "0.1.0-prototype",
   "backend": "ops",
@@ -7,6 +7,7 @@
   "product": "VCF Operations",
   "auth_scheme": "ops_token",
   "api_root": "/suite-api",
+  "verification_probe": {"tool": "list_adapter_kinds", "arguments": {}},
   "source": "Inherited measured contracts in docs/read-plane.md, based on the official VCF Operations OpenAPI and live read-only recon",
   "unsigned": true,
   "projection_keys": [

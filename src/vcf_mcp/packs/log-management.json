@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.log-management.read",
   "version": "0.2.0",
   "backend": "log-management",
@@ -7,6 +7,7 @@
   "product": "VCF Log Management",
   "auth_scheme": "ops_exchange",
   "api_root": "",
+  "verification_probe": {"tool": "list_log_agent_groups", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/vcf-operations/log-management-openapi.json, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

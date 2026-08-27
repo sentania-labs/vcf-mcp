@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.fleet-lcm.read",
   "version": "0.2.0",
   "backend": "fleet-lcm",
@@ -7,6 +7,7 @@
   "product": "VCF Fleet Lifecycle",
   "auth_scheme": "bearer_token",
   "api_root": "/fleet-lcm",
+  "verification_probe": {"tool": "get_fleet_health", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/fleet-lcm/fleet-lcm-openapi.yaml, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

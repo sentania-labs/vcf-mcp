@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.nsx.read",
   "version": "0.2.0",
   "backend": "nsx",
@@ -7,6 +7,7 @@
   "product": "NSX",
   "auth_scheme": "basic",
   "api_root": "/policy/api/v1",
+  "verification_probe": {"tool": "list_nsx_domains", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/nsx/openapi-2.0/nsx_policy_api.yaml, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

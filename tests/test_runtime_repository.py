@@ -501,6 +501,22 @@ async def test_auth_failure_lockout_persists_until_operator_clears_it(
     assert locked is not None and locked.auth_locked
     with pytest.raises(RuntimeStoreUnavailable, match="operator reset"):
         await repository.get_credentials(target.id)
+    with pytest.raises(RuntimeStoreUnavailable, match="operator reset"):
+        await repository.prepare_target_update(
+            target_id=target.id,
+            expected_generation=target.configuration_generation,
+            name=target.name,
+            fqdn=target.fqdn,
+            username="synthetic-replacement-reader",
+            password="synthetic-replacement-password",
+            auth_source=target.auth_source,
+            verify_ssl=target.verify_ssl,
+            posture=target.posture,
+        )
+    still_locked = await repository.get(target.id)
+    assert still_locked is not None
+    assert still_locked.auth_failure_count == 3
+    assert still_locked.auth_locked is True
     assert await repository.clear_auth_lockout(target.id) is True
     assert (await repository.get(target.id)).auth_locked is False
 

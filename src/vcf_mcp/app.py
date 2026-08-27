@@ -19,6 +19,7 @@ from vcf_mcp.contracts import AuditRepository
 from vcf_mcp.mcp_server import McpSurface, McpSurfaces
 from vcf_mcp.runtime_repository import RuntimeRepository
 from vcf_mcp.pack_trust import PackTrustManager
+from vcf_mcp.target_verification import TargetVerifier
 
 
 async def healthz(request: Request) -> JSONResponse:
@@ -138,6 +139,7 @@ def create_app(
     pack_trust_manager: PackTrustManager | None = None,
     restart_requester: Callable[[], None] | None = None,
     startup_errors: Mapping[str, str] | None = None,
+    target_verifier: TargetVerifier | None = None,
 ) -> Starlette:
     """Compose the parent app while retaining explicit test seams."""
 
@@ -218,4 +220,5 @@ def create_app(
     app.state.pack_trust_manager = pack_trust_manager
     app.state.restart_requester = restart_requester
     app.state.startup_errors = dict(startup_errors or {})
+    app.state.target_verifier = target_verifier
     return app
