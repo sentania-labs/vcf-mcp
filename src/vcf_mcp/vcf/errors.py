@@ -126,6 +126,18 @@ class UpstreamUnavailableError(VcfError):
     retryable = True
 
 
+class UpstreamResolutionError(UpstreamUnavailableError):
+    """The target hostname could not be resolved."""
+
+    error_code = "vcf_upstream_resolution_failed"
+
+
+class UpstreamConnectionError(UpstreamUnavailableError):
+    """The target resolved but a connection could not be established."""
+
+    error_code = "vcf_upstream_connection_failed"
+
+
 class TlsVerificationError(VcfError):
     """The target's certificate failed verification for that target's policy.
 

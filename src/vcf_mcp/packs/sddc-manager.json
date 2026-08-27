@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.sddc-manager.read",
   "version": "0.2.0",
   "backend": "sddc-manager",
@@ -7,6 +7,7 @@
   "product": "SDDC Manager",
   "auth_scheme": "sddc_token",
   "api_root": "",
+  "verification_probe": {"tool": "get_sddc_system", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/sddc-manager/sddc-manager-openapi.json, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

@@ -39,6 +39,11 @@ offering.
   Target-specific CA bundles are encrypted through that same keyring-backed
   path. The appliance CA is stored in the runtime database and follows its
   existing backup and restore procedure.
+- Registration and every target edit run the read-only probe declared by that
+  product's backend pack. Nothing is stored until the credential succeeds
+  through the target's effective TLS trust. The console distinguishes DNS,
+  connection, certificate trust, credential, and unexpected-response failures,
+  shows the last successful verification, and provides a manual recheck.
 - Enabling TLS verification, replacing a target CA, or removing a target CA
   cancels requests already running through that target. Setting, replacing,
   or removing the appliance CA cancels requests through every target. Other

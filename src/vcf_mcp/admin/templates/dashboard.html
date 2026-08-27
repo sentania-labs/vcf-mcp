@@ -61,7 +61,7 @@
   {% if active_tab == "targets" %}
   <section class="card">
     <h2>Register backend target</h2>
-    <p class="muted">TLS verification starts disabled and is labelled that way. Upload a trusted root CA before enabling verification.</p>
+    <p class="muted">The console runs the product pack's read-only verification probe and stores nothing unless the backend accepts the submitted credential.</p>
     <form method="post" action="/admin/targets" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="backend">Product</label>
@@ -181,6 +181,9 @@
       {% if target.auth_locked %}<span class="badge bad">authentication locked</span>{% endif %}
       {% if not target.is_usable %}<span class="badge bad">credential integrity failed</span>{% endif %}
     </summary>
+    <p><strong>Last successful verification:</strong>
+      {% if target.last_verified_at %}{{ target.last_verified_at }}{% else %}not yet verified by this console{% endif %}
+    </p>
     <p><strong>Trusted CA sources:</strong>
       {% if target_trust[target.id].uses_global_ca %}appliance CA{% endif %}{% if target_trust[target.id].uses_global_ca and target_trust[target.id].uses_target_ca %} plus {% endif %}{% if target_trust[target.id].uses_target_ca %}target-specific CA{% endif %}{% if not target_trust[target.id].uses_global_ca and not target_trust[target.id].uses_target_ca %}system trust only{% endif %}.
     </p>
@@ -238,6 +241,11 @@
       {% if not target.is_usable %}<p class="warning">This target is quarantined. Supply both credentials and replace or remove the stored root CA before it can return to service.</p>{% endif %}
       {% if target.is_prod %}<p class="warning">Production identity is derived from this FQDN and remains read-only.</p>{% endif %}
       <button type="submit">Save target changes</button>
+    </form>
+    <form method="post" action="/admin/targets/{{ target.id }}/verify">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <p class="muted">Run the pack's read-only probe now. This does not change posture or trigger the backend authentication lockout counter.</p>
+      <button type="submit">Verify target now</button>
     </form>
     {% if target.auth_locked %}
     <form method="post" action="/admin/targets/{{ target.id }}/auth-unlock">

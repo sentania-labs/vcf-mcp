@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.ops-networks.read",
   "version": "0.2.0",
   "backend": "ops-networks",
@@ -7,6 +7,7 @@
   "product": "VCF Operations for Networks",
   "auth_scheme": "ops_bearer",
   "api_root": "/api/ni",
+  "verification_probe": {"tool": "get_networks_version", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/vcf-operations/vcf-operations-for-networks-openapi.yaml, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

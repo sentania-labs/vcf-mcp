@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "sentania.vcenter.inventory",
   "version": "0.2.0",
   "backend": "vcenter",
@@ -7,6 +7,7 @@
   "product": "vCenter Server",
   "auth_scheme": "vcenter_session",
   "api_root": "",
+  "verification_probe": {"tool": "get_vcenter_session", "arguments": {}},
   "source": "vmware/vcf-api-specs specifications/vsphere/openapi/automation/vcenter.yaml, Apache-2.0",
   "source_kind": "official",
   "unsigned": true,

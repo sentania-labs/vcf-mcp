@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
+import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -16,9 +17,12 @@ from starlette.testclient import TestClient
 from vcf_mcp.admin import auth
 from vcf_mcp.app import create_app
 from vcf_mcp.audit import SqliteAuditRepository
+from vcf_mcp.backend_packs import load_backend_packs
 from vcf_mcp.contracts import AuthorizationMode, BackendKind, InvalidationMode
 from vcf_mcp.mcp_server import implemented_scopes
 from vcf_mcp.runtime_repository import RuntimeRepository
+from vcf_mcp.declared_backend import DeclaredBackendClient
+from vcf_mcp.target_verification import TargetVerifier
 
 
 def synthetic_ca_pem() -> str:
@@ -50,6 +54,36 @@ class RecordingInvalidator:
         self.calls.append(("all", mode))
 
 
+def successful_target_verifier(audit: SqliteAuditRepository) -> TargetVerifier:
+    packs = load_backend_packs()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/api/session"):
+            return httpx.Response(200, json="fixture-session")
+        if request.method == "POST" and "token" in request.url.path:
+            return httpx.Response(200, json={"token": "fixture-token"})
+        if request.method == "GET" and request.url.path == "/api/session":
+            return httpx.Response(200, json={"user": "fixture-user"})
+        return httpx.Response(200, json={"items": []})
+
+    def factory(target, credentials, pack, _root_ca_pem):
+        return DeclaredBackendClient(
+            target=target,
+            credentials=credentials,
+            pack=pack,
+            http_client=httpx.AsyncClient(
+                base_url=f"https://{target.fqdn}",
+                transport=httpx.MockTransport(handler),
+            ),
+        )
+
+    return TargetVerifier(
+        packs=packs,
+        audit_repository=audit,
+        client_factory=factory,
+    )
+
+
 def test_bootstrap_login_target_registration_and_key_mint(
     tmp_path: Path,
 ) -> None:
@@ -68,6 +102,7 @@ def test_bootstrap_login_target_registration_and_key_mint(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -171,6 +206,7 @@ def test_tab_urls_reload_and_remain_available_during_degraded_start(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=False,
@@ -240,6 +276,7 @@ def test_idle_timeout_post_returns_to_owning_tab_with_discard_notice(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -352,6 +389,7 @@ def test_quarantined_target_dashboard_requires_root_ca_recovery(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -394,6 +432,7 @@ def test_stale_reauth_reports_unsaved_target_and_protects_other_posts(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -529,6 +568,7 @@ def test_target_edit_rotates_credentials_uploads_ca_and_cancels_tls_work(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -611,6 +651,7 @@ def test_console_governs_global_ca_lifecycle_and_names_removal_impact(
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -772,6 +813,7 @@ def test_global_ca_removal_rejects_changed_target_set(tmp_path: Path) -> None:
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -835,6 +877,7 @@ def test_global_ca_removal_rejects_replaced_certificate(tmp_path: Path) -> None:
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -891,6 +934,7 @@ def test_login_with_non_ascii_username_is_denied(tmp_path: Path) -> None:
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,
@@ -929,6 +973,7 @@ def test_login_retries_leftover_bootstrap_cleanup(tmp_path: Path) -> None:
     audit.bootstrap(recovered_at=datetime.now(UTC))
     app = create_app(
         audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
         session_secret="synthetic-session-secret-with-at-least-32-bytes",
         runtime_repository=runtime,
         mcp_ready=True,

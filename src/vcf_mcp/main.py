@@ -49,6 +49,7 @@ from vcf_mcp.runtime_repository import (
     config_db_path_from_environment,
     credential_keyring_path_from_environment,
 )
+from vcf_mcp.target_verification import TargetVerifier
 from vcf_mcp.security import (
     load_or_create_audit_digest_key,
     load_or_create_session_secret,
@@ -277,6 +278,13 @@ def create_production_app(
         except Exception:
             LOGGER.exception("pending restart state could not be cleared")
 
+    target_verifier = None
+    if configuration_ready and packs is not None:
+        target_verifier = TargetVerifier(
+            packs=packs,
+            audit_repository=audit_repository,
+        )
+
     return create_app(
         audit_repository=audit_repository,
         session_secret=session_secret,
@@ -289,4 +297,5 @@ def create_production_app(
         pack_trust_manager=pack_trust_manager,
         restart_requester=restart_requester,
         startup_errors=startup_errors,
+        target_verifier=target_verifier,
     )
