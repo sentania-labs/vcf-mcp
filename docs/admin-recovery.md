@@ -9,7 +9,7 @@ Recovery has these effects:
 - MCP API keys survive unchanged.
 - Stored backend credentials and their encryption keyring are not exposed or changed.
 - The console displays the recovery time until an admin acknowledges the notice.
-- Recovery and notice dismissal are recorded in the durable configuration event ledger.
+- Recovery and notice dismissal are recorded in the durable configuration event ledger, shown under "Recent configuration audit" in the console's Audit tab. Dismissing the banner does not delete these records.
 
 The recovery file is `/keys/admin_recovery_password`. It must be a regular file owned by UID 10001, mode `0600`, containing one UTF-8 line of at least 16 bytes with no trailing newline. The filename is deliberately different from `/keys/admin_bootstrap_password`. A leftover bootstrap mount cannot recover an initialized appliance.
 
