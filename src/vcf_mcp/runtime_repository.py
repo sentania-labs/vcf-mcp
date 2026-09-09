@@ -95,6 +95,10 @@ class GlobalRootCaTargetSetChanged(ValueError):
     """Raised when global CA removal confirmation is stale."""
 
 
+class TargetDeletionStateChanged(ValueError):
+    """Raised when a target deletion confirmation is stale."""
+
+
 class AllTargetsIntegrityFailed(RuntimeStoreUnavailable):
     """Raised when no configured backend has a valid credential envelope."""
 
@@ -106,6 +110,37 @@ class TargetVerificationMaterial:
     target: TargetRecord
     credentials: TargetCredentials
     target_root_ca_pem: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TargetDeletionKeyImpact:
+    """One active API key that target deletion will revoke."""
+
+    key_id: KeyId
+    label: str
+    backends: tuple[str, ...]
+    allowed_targets: tuple[TargetId, ...]
+    authorization_mode: AuthorizationMode
+
+
+@dataclass(frozen=True, slots=True)
+class TargetDeletionPreview:
+    """Exact target and key state shown before destructive confirmation."""
+
+    target: TargetRecord
+    revoked_keys: tuple[TargetDeletionKeyImpact, ...]
+    last_target_for_backend: bool
+    confirmation_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class TargetDeletionResult:
+    """Committed deletion result used to complete client invalidation."""
+
+    target: TargetRecord
+    revoked_keys: tuple[TargetDeletionKeyImpact, ...]
+    last_target_for_backend: bool
+    change: TargetConfigurationChange
 
 
 def config_db_path_from_environment(
@@ -373,6 +408,22 @@ class RuntimeRepository:
             root_ca_pem,
             clear_root_ca,
             last_verified_at,
+        )
+
+    async def preview_target_deletion(
+        self, target_id: TargetId
+    ) -> TargetDeletionPreview | None:
+        """Return the exact target and active-key impact for confirmation."""
+
+        return await asyncio.to_thread(self._preview_target_deletion_sync, target_id)
+
+    async def delete_target(
+        self, target_id: TargetId, *, expected_confirmation_digest: str
+    ) -> TargetDeletionResult:
+        """Delete one target and revoke every scoped active key atomically."""
+
+        return await asyncio.to_thread(
+            self._delete_target_sync, target_id, expected_confirmation_digest
         )
 
     async def prepare_target_update(
@@ -1471,6 +1522,175 @@ class RuntimeRepository:
             )
             return stored, TargetConfigurationChange(
                 target_id, previous, target.configuration_generation
+            )
+
+    def _preview_target_deletion_sync(
+        self, target_id: TargetId
+    ) -> TargetDeletionPreview | None:
+        with self._lock:
+            return self._target_deletion_state_sync(
+                self._connection_or_raise(), target_id
+            )
+
+    def _target_deletion_state_sync(
+        self, connection: sqlite3.Connection, target_id: TargetId
+    ) -> TargetDeletionPreview | None:
+        target_row = connection.execute(
+            "SELECT * FROM targets WHERE id = ?", (str(target_id),)
+        ).fetchone()
+        if target_row is None:
+            return None
+        target = self._target_from_row(target_row)
+        impacts: list[TargetDeletionKeyImpact] = []
+        key_rows = connection.execute(
+            "SELECT key_id, label, allowed_targets_json, allowed_endpoints_json,"
+            " authorization_mode FROM api_keys WHERE revoked = 0"
+            " ORDER BY label COLLATE NOCASE, key_id"
+        ).fetchall()
+        for row in key_rows:
+            allowed_targets = tuple(
+                TargetId(value) for value in json.loads(row["allowed_targets_json"])
+            )
+            if target_id not in allowed_targets:
+                continue
+            impacts.append(
+                TargetDeletionKeyImpact(
+                    key_id=KeyId(row["key_id"]),
+                    label=row["label"],
+                    backends=tuple(json.loads(row["allowed_endpoints_json"])),
+                    allowed_targets=allowed_targets,
+                    authorization_mode=AuthorizationMode(row["authorization_mode"]),
+                )
+            )
+        remaining = connection.execute(
+            "SELECT COUNT(*) FROM targets WHERE backend = ? AND id <> ?",
+            (target.backend.value, str(target_id)),
+        ).fetchone()[0]
+        revoked_keys = tuple(impacts)
+        return TargetDeletionPreview(
+            target=target,
+            revoked_keys=revoked_keys,
+            last_target_for_backend=remaining == 0,
+            confirmation_digest=self._target_deletion_digest(target, revoked_keys),
+        )
+
+    @staticmethod
+    def _target_deletion_digest(
+        target: TargetRecord, revoked_keys: tuple[TargetDeletionKeyImpact, ...]
+    ) -> str:
+        exact_state = {
+            "target": {
+                "id": str(target.id),
+                "name": target.name,
+                "fqdn": target.fqdn,
+                "posture": target.posture.value,
+                "is_prod": target.is_prod,
+                "verify_ssl": target.verify_ssl,
+                "auth_source": target.auth_source,
+                "configuration_generation": int(target.configuration_generation),
+                "backend": target.backend.value,
+                "has_custom_ca": target.has_custom_ca,
+                "is_usable": target.is_usable,
+                "unusable_reason": target.unusable_reason,
+                "auth_failure_count": target.auth_failure_count,
+                "auth_locked": target.auth_locked,
+                "last_verified_at": (
+                    None
+                    if target.last_verified_at is None
+                    else target.last_verified_at.isoformat()
+                ),
+            },
+            "revoked_keys": [
+                {
+                    "key_id": str(key.key_id),
+                    "label": key.label,
+                    "backends": list(key.backends),
+                    "allowed_targets": sorted(
+                        str(value) for value in key.allowed_targets
+                    ),
+                    "authorization_mode": key.authorization_mode.value,
+                }
+                for key in revoked_keys
+            ],
+        }
+        encoded = json.dumps(exact_state, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _delete_target_sync(
+        self, target_id: TargetId, expected_confirmation_digest: str
+    ) -> TargetDeletionResult:
+        with self._write_transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            preview = self._target_deletion_state_sync(connection, target_id)
+            if preview is None or not secrets.compare_digest(
+                expected_confirmation_digest, preview.confirmation_digest
+            ):
+                raise TargetDeletionStateChanged(
+                    "the target or scoped API keys changed since the preview"
+                )
+            for key in preview.revoked_keys:
+                cursor = connection.execute(
+                    "UPDATE api_keys SET revoked = 1, revoked_at = CURRENT_TIMESTAMP"
+                    " WHERE key_id = ? AND revoked = 0",
+                    (str(key.key_id),),
+                )
+                if cursor.rowcount != 1:
+                    raise TargetDeletionStateChanged(
+                        "the target or scoped API keys changed since the preview"
+                    )
+                self._append_configuration_event_sync(
+                    connection,
+                    "api_key_revoked",
+                    {
+                        "key_id": str(key.key_id),
+                        "key_label": key.label,
+                        "reason": "target_deleted",
+                        "target_id": str(target_id),
+                        "target_name": preview.target.name,
+                        "backends": list(key.backends),
+                    },
+                )
+            deleted = connection.execute(
+                "DELETE FROM targets WHERE id = ?", (str(target_id),)
+            )
+            if deleted.rowcount != 1:
+                raise TargetDeletionStateChanged(
+                    "the target changed while deletion was being committed"
+                )
+            if preview.last_target_for_backend:
+                connection.execute(
+                    "INSERT INTO settings(name, value) VALUES"
+                    " ('restart_required', '1')"
+                    " ON CONFLICT(name) DO UPDATE SET value = excluded.value"
+                )
+            self._append_configuration_event_sync(
+                connection,
+                "target_deleted",
+                {
+                    "target_id": str(target_id),
+                    "target_name": preview.target.name,
+                    "backend": preview.target.backend.value,
+                    "revoked_key_count": len(preview.revoked_keys),
+                    "revoked_key_ids": [
+                        str(key.key_id) for key in preview.revoked_keys
+                    ],
+                    "last_target_for_backend": preview.last_target_for_backend,
+                    "restart_required": preview.last_target_for_backend,
+                },
+            )
+            connection.commit()
+            previous_generation = preview.target.configuration_generation
+            return TargetDeletionResult(
+                target=preview.target,
+                revoked_keys=preview.revoked_keys,
+                last_target_for_backend=preview.last_target_for_backend,
+                change=TargetConfigurationChange(
+                    target_id=target_id,
+                    previous_generation=previous_generation,
+                    current_generation=ConfigurationGeneration(
+                        int(previous_generation) + 1
+                    ),
+                ),
             )
 
     def _prepare_target_update_sync(
