@@ -662,6 +662,86 @@ async def test_target_deletion_refuses_a_stale_key_impact_preview(
 
 
 @pytest.mark.asyncio
+async def test_target_deletion_refuses_preview_when_last_target_status_changes(
+    repository: RuntimeRepository,
+) -> None:
+    first = await repository.create_target(
+        name="first-target",
+        fqdn="first.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    second = await repository.create_target(
+        name="second-target",
+        fqdn="second.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    second_preview = await repository.preview_target_deletion(second.id)
+    first_preview = await repository.preview_target_deletion(first.id)
+    assert second_preview is not None
+    assert first_preview is not None
+    assert second_preview.last_target_for_backend is False
+
+    await repository.delete_target(
+        first.id,
+        expected_confirmation_digest=first_preview.confirmation_digest,
+    )
+
+    with pytest.raises(TargetDeletionStateChanged, match="changed since the preview"):
+        await repository.delete_target(
+            second.id,
+            expected_confirmation_digest=second_preview.confirmation_digest,
+        )
+
+    assert await repository.get(second.id) == second
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_ignores_unusable_endpoint_survivors(
+    repository: RuntimeRepository,
+) -> None:
+    retiring = await repository.create_target(
+        name="retiring-target",
+        fqdn="retiring.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    unusable = await repository.create_target(
+        name="unusable-target",
+        fqdn="unusable.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    with sqlite3.connect(repository.database_path) as connection:
+        connection.execute(
+            "UPDATE targets SET unusable_reason = ? WHERE id = ?",
+            ("credential_integrity_failure", str(unusable.id)),
+        )
+
+    preview = await repository.preview_target_deletion(retiring.id)
+
+    assert preview is not None
+    assert preview.last_target_for_backend is True
+
+    result = await repository.delete_target(
+        retiring.id,
+        expected_confirmation_digest=preview.confirmation_digest,
+    )
+
+    assert result.last_target_for_backend is True
+    assert await repository.restart_required() is True
+
+
+@pytest.mark.asyncio
 async def test_auth_failure_lockout_persists_until_operator_clears_it(
     repository: RuntimeRepository,
 ) -> None:

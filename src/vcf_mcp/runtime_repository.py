@@ -1571,20 +1571,26 @@ class RuntimeRepository:
                 )
             )
         remaining = connection.execute(
-            "SELECT COUNT(*) FROM targets WHERE backend = ? AND id <> ?",
+            "SELECT COUNT(*) FROM targets"
+            " WHERE backend = ? AND id <> ? AND unusable_reason IS NULL",
             (target.backend.value, str(target_id)),
         ).fetchone()[0]
         revoked_keys = tuple(impacts)
+        last_target_for_backend = remaining == 0
         return TargetDeletionPreview(
             target=target,
             revoked_keys=revoked_keys,
-            last_target_for_backend=remaining == 0,
-            confirmation_digest=self._target_deletion_digest(target, revoked_keys),
+            last_target_for_backend=last_target_for_backend,
+            confirmation_digest=self._target_deletion_digest(
+                target, revoked_keys, last_target_for_backend
+            ),
         )
 
     @staticmethod
     def _target_deletion_digest(
-        target: TargetRecord, revoked_keys: tuple[TargetDeletionKeyImpact, ...]
+        target: TargetRecord,
+        revoked_keys: tuple[TargetDeletionKeyImpact, ...],
+        last_target_for_backend: bool,
     ) -> str:
         exact_state = {
             "target": {
@@ -1621,6 +1627,7 @@ class RuntimeRepository:
                 }
                 for key in revoked_keys
             ],
+            "last_target_for_backend": last_target_for_backend,
         }
         encoded = json.dumps(exact_state, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
