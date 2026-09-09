@@ -42,7 +42,10 @@ other sensitive console actions.
 After the transaction commits, new calls have no authority because scoped keys
 are revoked and the target no longer resolves. The console cancels and awaits
 already-running calls through the target client invalidator before reporting
-success.
+success. The pool retains clients already draining after an edit until their
+requests and transport close have settled, so deletion also cancels those older
+generations. Key backend coverage comes from allowed targets; endpoint scope is
+displayed separately.
 
 When the deleted target was the last target for its product, the already mounted
 endpoint remains in the current process until the next explicit restart. The

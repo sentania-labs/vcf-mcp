@@ -119,6 +119,7 @@ class TargetDeletionKeyImpact:
     key_id: KeyId
     label: str
     backends: tuple[str, ...]
+    allowed_endpoints: tuple[str, ...]
     allowed_targets: tuple[TargetId, ...]
     authorization_mode: AuthorizationMode
 
@@ -1541,6 +1542,10 @@ class RuntimeRepository:
         if target_row is None:
             return None
         target = self._target_from_row(target_row)
+        target_backends = {
+            row["id"]: row["backend"]
+            for row in connection.execute("SELECT id, backend FROM targets")
+        }
         impacts: list[TargetDeletionKeyImpact] = []
         key_rows = connection.execute(
             "SELECT key_id, label, allowed_targets_json, allowed_endpoints_json,"
@@ -1557,7 +1562,10 @@ class RuntimeRepository:
                 TargetDeletionKeyImpact(
                     key_id=KeyId(row["key_id"]),
                     label=row["label"],
-                    backends=tuple(json.loads(row["allowed_endpoints_json"])),
+                    backends=tuple(sorted({
+                        target_backends[str(value)] for value in allowed_targets
+                    })),
+                    allowed_endpoints=tuple(json.loads(row["allowed_endpoints_json"])),
                     allowed_targets=allowed_targets,
                     authorization_mode=AuthorizationMode(row["authorization_mode"]),
                 )
@@ -1605,6 +1613,7 @@ class RuntimeRepository:
                     "key_id": str(key.key_id),
                     "label": key.label,
                     "backends": list(key.backends),
+                    "allowed_endpoints": list(key.allowed_endpoints),
                     "allowed_targets": sorted(
                         str(value) for value in key.allowed_targets
                     ),

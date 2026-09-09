@@ -508,11 +508,12 @@ async def test_target_deletion_revokes_scoped_keys_and_records_exact_impact(
         verify_ssl=False,
         backend=BackendKind.NSX,
     )
+    await repository.set_authorization_mode(AuthorizationMode.GATEWAY)
     shared_key = await repository.create_api_key(
         label="shared-estate",
         scopes=SCOPES,
         allowed_targets=frozenset({vcenter.id, nsx.id}),
-        allowed_endpoints=frozenset({"vcenter", "nsx", "vcf"}),
+        allowed_endpoints=frozenset({"vcf"}),
     )
     vcenter_key = await repository.create_api_key(
         label="vcenter-only",
@@ -536,7 +537,8 @@ async def test_target_deletion_revokes_scoped_keys_and_records_exact_impact(
         "shared-estate",
         "vcenter-only",
     ]
-    assert preview.revoked_keys[0].backends == ("nsx", "vcenter", "vcf")
+    assert preview.revoked_keys[0].backends == ("nsx", "vcenter")
+    assert preview.revoked_keys[0].allowed_endpoints == ("vcf",)
 
     result = await repository.delete_target(
         vcenter.id,

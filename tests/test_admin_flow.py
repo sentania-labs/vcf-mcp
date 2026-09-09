@@ -658,12 +658,13 @@ def test_target_deletion_previews_key_blast_radius_and_awaits_cancellation(
             backend=BackendKind.NSX,
         )
     )
+    asyncio.run(runtime.set_authorization_mode(AuthorizationMode.GATEWAY))
     first_key = asyncio.run(
         runtime.create_api_key(
             label="ops-readonly",
             scopes=frozenset(),
             allowed_targets=frozenset({vcenter.id, nsx.id}),
-            allowed_endpoints=frozenset({"vcenter", "nsx", "vcf"}),
+            allowed_endpoints=frozenset({"vcf"}),
         )
     )
     second_key = asyncio.run(
@@ -721,7 +722,8 @@ def test_target_deletion_previews_key_blast_radius_and_awaits_cancellation(
             assert "Delete vcenter-lab?" in preview.text
             assert "ops-readonly" in preview.text
             assert "jump-host" in preview.text
-            assert "nsx, vcenter, vcf" in preview.text
+            assert "nsx, vcenter" in preview.text
+            assert "<code>/vcf/mcp</code>" in preview.text
             assert "This is the last vcenter target" in preview.text
             assert "endpoint disappears after restart" in preview.text
             csrf = re.search(r'name="csrf_token" value="([^"]+)"', preview.text)

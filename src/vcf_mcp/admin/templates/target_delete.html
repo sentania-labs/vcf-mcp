@@ -17,13 +17,14 @@
   <h3>API keys that will be revoked</h3>
   {% if preview.revoked_keys %}
   <table>
-    <thead><tr><th>Name</th><th>ID</th><th>Backends covered</th></tr></thead>
+    <thead><tr><th>Name</th><th>ID</th><th>Backends covered</th><th>Endpoint scope</th></tr></thead>
     <tbody>
     {% for api_key in preview.revoked_keys %}
       <tr>
         <td><strong>{{ api_key.label }}</strong></td>
         <td><code>{{ api_key.key_id }}</code></td>
         <td>{{ api_key.backends|join(", ") }}</td>
+        <td>{% for endpoint in api_key.allowed_endpoints %}<code>/{{ endpoint }}/mcp</code>{{ ", " if not loop.last else "" }}{% endfor %}</td>
       </tr>
     {% endfor %}
     </tbody>

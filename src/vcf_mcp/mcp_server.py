@@ -120,6 +120,7 @@ class BackendClientPool:
             client_factory is not None and _accepts_root_ca(client_factory)
         )
         self._clients: dict[TargetId, object] = {}
+        self._unsettled: dict[TargetId, dict[object, asyncio.Task[None]]] = {}
         self._trust: dict[TargetId, tuple[bool, str | None]] = {}
         self._lock = asyncio.Lock()
         self._authentication_locks: dict[TargetId, asyncio.Lock] = {}
@@ -193,7 +194,7 @@ class BackendClientPool:
             stale_trust = self._trust.get(target.id)
             if existing is not None:
                 self._clients.pop(target.id, None)
-                existing.mark_closed()
+                self._retire(target.id, existing)
                 stale = existing
             credentials = await self._repository.get_credentials(target.id)
             effective_trust = await self._repository.get_effective_trust(target.id)
@@ -225,9 +226,9 @@ class BackendClientPool:
             )
         if mode is InvalidationMode.CANCEL:
             await stale.cancel()
-        else:
-            await stale.drain()
-        await stale.aclose()
+        task = self._unsettled.get(target.id, {}).get(stale)
+        if task is not None:
+            await asyncio.shield(task)
 
     def _build_client(
         self,
@@ -266,6 +267,22 @@ class BackendClientPool:
             upstream_control=self._upstream_control,
         )
 
+    def _retire(self, target_id: TargetId, client: object) -> int:
+        inflight = client.mark_closed()
+        unsettled = self._unsettled.setdefault(target_id, {})
+        if client not in unsettled:
+            unsettled[client] = asyncio.create_task(self._finish_retirement(target_id, client))
+        return inflight
+
+    async def _finish_retirement(self, target_id: TargetId, client: object) -> None:
+        await client.drain()
+        await client.aclose()
+        async with self._lock:
+            unsettled = self._unsettled[target_id]
+            unsettled.pop(client)
+            if not unsettled:
+                self._unsettled.pop(target_id)
+
     async def invalidate(
         self,
         change: TargetConfigurationChange,
@@ -275,53 +292,62 @@ class BackendClientPool:
         self._confirmed_auth_generation.pop(change.target_id, None)
         async with self._lock:
             client = self._clients.get(change.target_id)
-            if client is None:
-                return InvalidationResult(change, mode, 0, 0)
-            if client.configuration_generation >= change.current_generation:
-                return InvalidationResult(change, mode, 0, 0)
-            inflight = client.mark_closed()
-            self._clients.pop(change.target_id, None)
-            self._trust.pop(change.target_id, None)
-        if mode is InvalidationMode.CANCEL:
-            cancelled = await client.cancel()
-            drained = 0
-        else:
-            await client.drain()
-            drained = inflight
-            cancelled = 0
-        await client.aclose()
-        return InvalidationResult(change, mode, drained, cancelled)
+            inflight = 0
+            if client is not None and client.configuration_generation < change.current_generation:
+                inflight = self._retire(change.target_id, client)
+                self._clients.pop(change.target_id)
+                self._trust.pop(change.target_id, None)
+            unsettled = tuple(
+                (client, task)
+                for client, task in self._unsettled.get(change.target_id, {}).items()
+                if client.configuration_generation < change.current_generation
+            )
+        cancelled = 0
+        for client, task in unsettled:
+            if mode is InvalidationMode.CANCEL:
+                cancelled += await client.cancel()
+            await asyncio.shield(task)
+        return InvalidationResult(
+            change, mode, inflight if mode is InvalidationMode.DRAIN else 0, cancelled
+        )
 
     async def aclose(self) -> None:
         async with self._lock:
             clients = tuple(self._clients.values())
             self._clients.clear()
             self._trust.clear()
+            pending = tuple(
+                task for clients in self._unsettled.values() for task in clients.values()
+            )
         for client in clients:
             client.mark_closed()
             await client.aclose()
+        for task in pending:
+            await asyncio.shield(task)
 
     async def invalidate_all(self, *, mode: InvalidationMode) -> None:
         """Discard every cached client after appliance trust changes."""
 
         async with self._lock:
-            clients = tuple(self._clients.values())
+            for target_id, client in self._clients.items():
+                self._retire(target_id, client)
             self._clients.clear()
             self._trust.clear()
             self._confirmed_auth_generation.clear()
-            for client in clients:
-                client.mark_closed()
+            unsettled = tuple(
+                (client, task)
+                for clients in self._unsettled.values()
+                for client, task in clients.items()
+            )
         failures: list[Exception] = []
-        for client in clients:
+        for client, task in unsettled:
             try:
                 if mode is InvalidationMode.CANCEL:
                     await client.cancel()
-                else:
-                    await client.drain()
             except Exception as exc:
                 failures.append(exc)
             try:
-                await client.aclose()
+                await asyncio.shield(task)
             except Exception as exc:
                 failures.append(exc)
         if failures:
