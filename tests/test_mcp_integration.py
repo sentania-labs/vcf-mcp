@@ -780,6 +780,7 @@ async def test_target_deletion_cancels_calls_already_draining_after_edit(
     pack = load_backend_packs()[BackendKind.VCENTER]
     entered: asyncio.Queue[None] = asyncio.Queue()
     draining = asyncio.Event()
+    replacement_built = asyncio.Event()
     calls: list[asyncio.Task] = []
     edit_task = None
 
@@ -796,7 +797,7 @@ async def test_target_deletion_cancels_calls_already_draining_after_edit(
             await super().drain()
 
     def factory(target, credentials, root_ca):
-        return ObservedClient(
+        client = ObservedClient(
             target=target, credentials=credentials,
             tools={tool.name: tool for tool in pack.tools}, caps=pack.caps,
             http_client=httpx.AsyncClient(
@@ -804,6 +805,10 @@ async def test_target_deletion_cancels_calls_already_draining_after_edit(
                 transport=httpx.MockTransport(appliance),
             ),
         )
+
+        if int(target.configuration_generation) > 1:
+            replacement_built.set()
+        return client
 
     pool = BackendClientPool(runtime, pack, client_factory=factory)
     try:
@@ -825,6 +830,9 @@ async def test_target_deletion_cancels_calls_already_draining_after_edit(
             if edit_path == "invalidate" else pool.get(updated)
         )
         await asyncio.wait_for(draining.wait(), timeout=2)
+        if edit_path == "get":
+            # Reach the drain wait, not the replacement credential lookup.
+            await asyncio.wait_for(replacement_built.wait(), timeout=2)
         assert not calls[0].done()
         assert not edit_task.done()
         if replacement_call:

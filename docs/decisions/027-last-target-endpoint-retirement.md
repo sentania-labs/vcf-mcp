@@ -50,8 +50,11 @@ awaits these registered calls and rejects late calls using a cancelled target
 generation. Key backend coverage comes from allowed targets; endpoint scope is
 displayed separately.
 
-When the deleted target was the last target for its product, the already mounted
-endpoint remains in the current process until the next explicit restart. The
+When deletion leaves no usable target for its product, the already mounted
+endpoint remains in the current process until the next explicit restart.
+Quarantined targets do not count as survivors for this decision (see
+`test_target_deletion_ignores_unusable_endpoint_survivors` in
+`tests/test_runtime_repository.py`). The
 transaction marks restart required. The console states that the deleted target
 is already unusable, the endpoint stays mounted until restart, and the endpoint
 disappears after restart. This preserves the startup-frozen routing model and
