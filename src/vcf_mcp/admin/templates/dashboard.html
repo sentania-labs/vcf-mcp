@@ -11,6 +11,7 @@
   </form>
 </div>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if target_delete_notice %}<p class="notice" role="status">{{ target_delete_notice }}</p>{% endif %}
 {% if admin_recovery_notice %}
 <section class="card warning" role="status" aria-labelledby="recovery-notice-heading">
   <h2 id="recovery-notice-heading">Administrator access was recovered</h2>
@@ -264,6 +265,10 @@
       <button type="submit">Clear authentication lock</button>
     </form>
     {% endif %}
+    <form method="get" action="/admin/targets/{{ target.id }}/delete">
+      <p class="warning">Deleting this target also revokes every active API key scoped to it. Review the exact impact before confirming.</p>
+      <button class="danger" type="submit">Delete target...</button>
+    </form>
   </details>
   {% else %}
   <div class="card muted">No targets registered.</div>

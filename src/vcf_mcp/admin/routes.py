@@ -36,6 +36,8 @@ from vcf_mcp.runtime_repository import (
     GlobalRootCaTargetSetChanged,
     RuntimeRepository,
     RuntimeStoreUnavailable,
+    TargetDeletionPreview,
+    TargetDeletionStateChanged,
     global_ca_target_digest,
 )
 from vcf_mcp.target_verification import (
@@ -422,6 +424,125 @@ async def post_target_update(request: Request):
         )
     auth.rotate_session(request)
     return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
+
+
+async def get_target_delete(request: Request):
+    check = await require_auth(request, tab="targets")
+    if check:
+        return check
+    preview = await _repository(request).preview_target_deletion(
+        TargetId(request.path_params["target_id"])
+    )
+    if preview is None:
+        return await _dashboard_response(
+            request,
+            error="Target does not exist.",
+            status_code=404,
+            active_tab="targets",
+        )
+    return _target_delete_preview_response(request, preview)
+
+
+async def post_target_delete(request: Request):
+    form = await request.form()
+    target_id = TargetId(request.path_params["target_id"])
+    repository = _repository(request)
+    preview = await repository.preview_target_deletion(target_id)
+    if preview is None:
+        return await _dashboard_response(
+            request,
+            error="Target does not exist.",
+            status_code=404,
+            active_tab="targets",
+        )
+    if form.get("confirm_delete") != "on":
+        return _target_delete_preview_response(
+            request,
+            preview,
+            error="Review the target and scoped API keys, then confirm deletion.",
+            status_code=400,
+        )
+    try:
+        result = await repository.delete_target(
+            target_id,
+            expected_confirmation_digest=str(form.get("target_deletion_digest", "")),
+        )
+    except TargetDeletionStateChanged:
+        current = await repository.preview_target_deletion(target_id)
+        if current is None:
+            return await _dashboard_response(
+                request,
+                error=(
+                    "The target changed or was deleted since the preview. "
+                    "Review the current target list."
+                ),
+                status_code=409,
+                active_tab="targets",
+            )
+        return _target_delete_preview_response(
+            request,
+            current,
+            error=(
+                "The target or scoped API keys changed since this preview. "
+                "Review the current impact and confirm deletion again."
+            ),
+            status_code=409,
+        )
+
+    invalidator = getattr(request.app.state, "target_invalidator", None)
+    try:
+        if invalidator is not None:
+            await invalidator.invalidate(result.change, mode=InvalidationMode.CANCEL)
+    except Exception:
+        return await _dashboard_response(
+            request,
+            error=(
+                "The target and scoped API keys were removed, but cancellation of "
+                "running calls could not be confirmed. Restart the appliance before "
+                "treating the retirement as complete."
+            ),
+            status_code=500,
+            active_tab="targets",
+        )
+
+    revoked_count = len(result.revoked_keys)
+    if result.last_target_for_backend:
+        message = (
+            f"Deleted {result.target.name} and revoked {revoked_count} scoped API "
+            f"key{'s' if revoked_count != 1 else ''}. The "
+            f"/{result.target.backend.value}/mcp endpoint stays mounted until the "
+            "next explicit restart, but the deleted target is already unusable. "
+            "Restart required: the endpoint disappears after restart."
+        )
+    else:
+        message = (
+            f"Deleted {result.target.name} and revoked {revoked_count} scoped API "
+            f"key{'s' if revoked_count != 1 else ''}. The deleted target is already "
+            "unusable, and the product endpoint remains available through its other "
+            "targets."
+        )
+    request.session["target_delete_notice"] = message
+    auth.rotate_session(request)
+    return RedirectResponse(url=_dashboard_url("targets"), status_code=303)
+
+
+def _target_delete_preview_response(
+    request: Request,
+    preview: TargetDeletionPreview,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+):
+    return templates.TemplateResponse(
+        request,
+        "target_delete.html",
+        {
+            "preview": preview,
+            "csrf_token": request.session["csrf_token"],
+            "error": error,
+        },
+        status_code=status_code,
+    )
 
 
 async def post_target_verify(request: Request):
@@ -1078,6 +1199,7 @@ async def _dashboard_response(
             "wired_endpoints": wired_endpoints,
             "csrf_token": request.session["csrf_token"],
             "error": error,
+            "target_delete_notice": request.session.pop("target_delete_notice", None),
             "active_tab": selected_tab,
         },
         status_code=status_code,
@@ -1113,6 +1235,18 @@ admin_routes = [
         "/admin/targets/{target_id}",
         endpoint=_degraded_to_503(
             _recent_reauth_post(post_target_update, tab="targets")
+        ),
+        methods=["POST"],
+    ),
+    Route(
+        "/admin/targets/{target_id}/delete",
+        endpoint=_degraded_to_503(get_target_delete),
+        methods=["GET"],
+    ),
+    Route(
+        "/admin/targets/{target_id}/delete",
+        endpoint=_degraded_to_503(
+            _recent_reauth_post(post_target_delete, tab="targets")
         ),
         methods=["POST"],
     ),

@@ -626,6 +626,252 @@ def test_target_edit_rotates_credentials_uploads_ca_and_cancels_tls_work(
         audit.close()
 
 
+def test_target_deletion_previews_key_blast_radius_and_awaits_cancellation(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    vcenter = asyncio.run(
+        runtime.create_target(
+            name="vcenter-lab",
+            fqdn="vcenter.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+            backend=BackendKind.VCENTER,
+        )
+    )
+    nsx = asyncio.run(
+        runtime.create_target(
+            name="nsx-lab",
+            fqdn="nsx.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+            backend=BackendKind.NSX,
+        )
+    )
+    asyncio.run(runtime.set_authorization_mode(AuthorizationMode.GATEWAY))
+    first_key = asyncio.run(
+        runtime.create_api_key(
+            label="ops-readonly",
+            scopes=frozenset(),
+            allowed_targets=frozenset({vcenter.id, nsx.id}),
+            allowed_endpoints=frozenset({"vcf"}),
+        )
+    )
+    second_key = asyncio.run(
+        runtime.create_api_key(
+            label="jump-host",
+            scopes=frozenset(),
+            allowed_targets=frozenset({vcenter.id}),
+            allowed_endpoints=frozenset({"vcenter"}),
+        )
+    )
+    runtime.set_restart_required_at_startup(False)
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+
+    class DeletionBarrier:
+        def __init__(self) -> None:
+            self.completed = False
+            self.calls = []
+
+        async def invalidate(self, change, *, mode):
+            assert await runtime.get(change.target_id) is None
+            assert (await runtime.resolve_request_identity(first_key)).revoked is True
+            assert (await runtime.resolve_request_identity(second_key)).revoked is True
+            self.calls.append((change, mode))
+            await asyncio.sleep(0)
+            self.completed = True
+
+    invalidator = DeletionBarrier()
+    app = create_app(
+        audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+    app.state.target_invalidator = invalidator
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            unauthenticated = client.get(
+                f"/admin/targets/{vcenter.id}/delete", follow_redirects=False
+            )
+            assert unauthenticated.status_code == 303
+            assert unauthenticated.headers["location"].startswith("/admin/login")
+            client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-admin-password",
+                },
+            )
+
+            preview = client.get(f"/admin/targets/{vcenter.id}/delete")
+            assert preview.status_code == 200
+            assert "Delete vcenter-lab?" in preview.text
+            assert "ops-readonly" in preview.text
+            assert "jump-host" in preview.text
+            assert "nsx, vcenter" in preview.text
+            assert "<code>/vcf/mcp</code>" in preview.text
+            assert "This is the last vcenter target" in preview.text
+            assert "endpoint disappears after restart" in preview.text
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', preview.text)
+            digest = re.search(
+                r'name="target_deletion_digest" value="([a-f0-9]+)"',
+                preview.text,
+            )
+            assert csrf is not None and digest is not None
+
+            forged = client.post(
+                f"/admin/targets/{vcenter.id}/delete",
+                data={
+                    "csrf_token": "wrong",
+                    "target_deletion_digest": digest.group(1),
+                    "confirm_delete": "on",
+                },
+            )
+            assert forged.status_code == 403
+            assert asyncio.run(runtime.get(vcenter.id)) is not None
+
+            with mock.patch("vcf_mcp.admin.auth.is_recent_reauth", return_value=False):
+                stale_reauth = client.post(
+                    f"/admin/targets/{vcenter.id}/delete",
+                    data={
+                        "csrf_token": csrf.group(1),
+                        "target_deletion_digest": digest.group(1),
+                        "confirm_delete": "on",
+                    },
+                    follow_redirects=False,
+                )
+            assert stale_reauth.status_code == 303
+            assert stale_reauth.headers["location"] == "/admin/reauth"
+            assert asyncio.run(runtime.get(vcenter.id)) is not None
+
+            unconfirmed = client.post(
+                f"/admin/targets/{vcenter.id}/delete",
+                data={
+                    "csrf_token": csrf.group(1),
+                    "target_deletion_digest": digest.group(1),
+                },
+            )
+            assert unconfirmed.status_code == 400
+            assert "confirm deletion" in unconfirmed.text
+
+            deleted = client.post(
+                f"/admin/targets/{vcenter.id}/delete",
+                data={
+                    "csrf_token": csrf.group(1),
+                    "target_deletion_digest": digest.group(1),
+                    "confirm_delete": "on",
+                },
+                follow_redirects=False,
+            )
+            assert deleted.status_code == 303
+            assert deleted.headers["location"] == "/admin?tab=targets"
+            assert invalidator.completed is True
+            assert invalidator.calls[0][1] is InvalidationMode.CANCEL
+
+            post_delete = client.get(deleted.headers["location"])
+            assert (
+                "Deleted vcenter-lab and revoked 2 scoped API keys" in post_delete.text
+            )
+            assert (
+                "endpoint stays mounted until the next explicit restart"
+                in post_delete.text
+            )
+            assert "deleted target is already unusable" in post_delete.text
+            assert "endpoint disappears after restart" in post_delete.text
+            assert "vcenter-lab" not in post_delete.text.split("<h2>Targets</h2>", 1)[1]
+
+        assert asyncio.run(runtime.get(vcenter.id)) is None
+        assert asyncio.run(runtime.restart_required()) is True
+    finally:
+        runtime.close()
+        audit.close()
+
+
+def test_target_deletion_rejects_a_stale_console_preview(tmp_path: Path) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-admin-password"))
+    target = asyncio.run(
+        runtime.create_target(
+            name="stale-preview",
+            fqdn="stale-preview.example.internal",
+            username="synthetic-reader",
+            password="synthetic-password",
+            auth_source="LOCAL",
+            verify_ssl=False,
+        )
+    )
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-admin-password",
+                },
+            )
+            preview = client.get(f"/admin/targets/{target.id}/delete")
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', preview.text)
+            digest = re.search(
+                r'name="target_deletion_digest" value="([a-f0-9]+)"',
+                preview.text,
+            )
+            assert csrf is not None and digest is not None
+            asyncio.run(
+                runtime.create_api_key(
+                    label="arrived-later",
+                    scopes=frozenset(),
+                    allowed_targets=frozenset({target.id}),
+                    allowed_endpoints=frozenset({"ops"}),
+                )
+            )
+
+            refused = client.post(
+                f"/admin/targets/{target.id}/delete",
+                data={
+                    "csrf_token": csrf.group(1),
+                    "target_deletion_digest": digest.group(1),
+                    "confirm_delete": "on",
+                },
+            )
+
+            assert refused.status_code == 409
+            assert "scoped API keys changed since this preview" in refused.text
+            assert "arrived-later" in refused.text
+            assert asyncio.run(runtime.get(target.id)) is not None
+    finally:
+        runtime.close()
+        audit.close()
+
+
 def test_console_governs_global_ca_lifecycle_and_names_removal_impact(
     tmp_path: Path,
 ) -> None:

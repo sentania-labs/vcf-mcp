@@ -52,6 +52,16 @@ offering.
   generation.
 - API keys select endpoints, capabilities, and targets. Revocation applies on
   the next request.
+- On the Targets tab, expand a target and choose **Delete target...** to preview
+  every affected API key by name, backend coverage, and endpoint scope. Confirming
+  this irreversible action removes the target and its encrypted credentials and
+  revokes the listed keys in one transaction. Shared keys lose all access,
+  including access to other targets; issue replacement keys as needed. The
+  console cancels queued and running calls before reporting success. Deleting a
+  product's last target marks restart required; its startup-mounted endpoint
+  remains until that restart, then disappears. The target is unusable immediately.
+  See [decision 027](docs/decisions/027-last-target-endpoint-retirement.md) for
+  confirmation safeguards, audit retention, and the cancellation contract.
 - Local mode supports many explicitly scoped keys and defaults new keys to no
   tool scope. Gateway mode issues one broad key per endpoint registration.
   Switching modes revokes every active key in the same transaction.

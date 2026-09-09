@@ -382,10 +382,11 @@ class PoolClient:
     async def drain(self) -> None:
         self.drain_started.set()
         await self.release_drain.wait()
-        self.drained = True
+        self.drained = not self.cancelled
 
     async def cancel(self) -> int:
         self.cancelled = True
+        self.release_drain.set()
         return 1
 
     async def aclose(self) -> None:

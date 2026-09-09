@@ -63,7 +63,11 @@ from vcf_mcp.vcenter import VcenterTargetClient
 from vcf_mcp.vcf.adapters import ADAPTERS_BY_TOOL_NAME, READ_ADAPTERS
 from vcf_mcp.vcf.client import TargetCredentials, VcfTargetClient
 from vcf_mcp.vcf.outbound import OutboundAllowlist
-from vcf_mcp.vcf.errors import AuthenticationError, ReauthenticationExhausted
+from vcf_mcp.vcf.errors import (
+    AuthenticationError,
+    ReauthenticationExhausted,
+    TargetConfigurationSuperseded,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -119,7 +123,12 @@ class BackendClientPool:
         self._factory_accepts_root_ca = bool(
             client_factory is not None and _accepts_root_ca(client_factory)
         )
+        self._calls: dict[
+            TargetId, dict[asyncio.Task[object], ConfigurationGeneration]
+        ] = {}
+        self._cancelled_before: dict[TargetId, ConfigurationGeneration] = {}
         self._clients: dict[TargetId, object] = {}
+        self._unsettled: dict[TargetId, dict[object, asyncio.Task[None]]] = {}
         self._trust: dict[TargetId, tuple[bool, str | None]] = {}
         self._lock = asyncio.Lock()
         self._authentication_locks: dict[TargetId, asyncio.Lock] = {}
@@ -141,18 +150,44 @@ class BackendClientPool:
     ) -> Mapping[str, object]:
         """Confirm one credential generation before allowing concurrent reads."""
 
-        if self._confirmed_auth_generation.get(target.id) == target.configuration_generation:
-            return await self._invoke_and_track(target, handler, arguments)
-        authentication_lock = self._authentication_locks.setdefault(
-            target.id, asyncio.Lock()
-        )
-        async with authentication_lock:
-            fresh = await self._repository.get(target.id)
-            if fresh is None or fresh.auth_locked:
-                raise PermissionError(
-                    "backend authentication is locked pending operator reset"
-                )
-            return await self._invoke_and_track(fresh, handler, arguments)
+        cutoff = self._cancelled_before.get(target.id)
+        if cutoff is not None and target.configuration_generation < cutoff:
+            raise TargetConfigurationSuperseded(
+                "the target configuration was replaced",
+                target_id=target.id,
+            )
+        task = asyncio.current_task()
+        assert task is not None
+        calls = self._calls.setdefault(target.id, {})
+        calls[task] = target.configuration_generation
+        try:
+            if self._confirmed_auth_generation.get(target.id) == target.configuration_generation:
+                return await self._invoke_and_track(target, handler, arguments)
+            authentication_lock = self._authentication_locks.setdefault(
+                target.id, asyncio.Lock()
+            )
+            async with authentication_lock:
+                fresh = await self._repository.get(target.id)
+                if fresh is None or fresh.auth_locked:
+                    raise PermissionError(
+                        "backend authentication is locked pending operator reset"
+                    )
+                return await self._invoke_and_track(fresh, handler, arguments)
+        finally:
+            calls.pop(task)
+            if not calls:
+                self._calls.pop(target.id)
+
+    @staticmethod
+    async def _cancel_calls(calls: tuple[asyncio.Task[object], ...]) -> int:
+        if asyncio.current_task() in calls:
+            raise RuntimeError("a target call cannot await its own invalidation")
+        pending = tuple(task for task in calls if not task.done())
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        return len(pending)
 
     async def _invoke_and_track(
         self,
@@ -193,7 +228,7 @@ class BackendClientPool:
             stale_trust = self._trust.get(target.id)
             if existing is not None:
                 self._clients.pop(target.id, None)
-                existing.mark_closed()
+                self._retire(target.id, existing)
                 stale = existing
             credentials = await self._repository.get_credentials(target.id)
             effective_trust = await self._repository.get_effective_trust(target.id)
@@ -225,9 +260,9 @@ class BackendClientPool:
             )
         if mode is InvalidationMode.CANCEL:
             await stale.cancel()
-        else:
-            await stale.drain()
-        await stale.aclose()
+        task = self._unsettled.get(target.id, {}).get(stale)
+        if task is not None:
+            await asyncio.shield(task)
 
     def _build_client(
         self,
@@ -266,6 +301,22 @@ class BackendClientPool:
             upstream_control=self._upstream_control,
         )
 
+    def _retire(self, target_id: TargetId, client: object) -> int:
+        inflight = client.mark_closed()
+        unsettled = self._unsettled.setdefault(target_id, {})
+        if client not in unsettled:
+            unsettled[client] = asyncio.create_task(self._finish_retirement(target_id, client))
+        return inflight
+
+    async def _finish_retirement(self, target_id: TargetId, client: object) -> None:
+        await client.drain()
+        await client.aclose()
+        async with self._lock:
+            unsettled = self._unsettled[target_id]
+            unsettled.pop(client)
+            if not unsettled:
+                self._unsettled.pop(target_id)
+
     async def invalidate(
         self,
         change: TargetConfigurationChange,
@@ -273,55 +324,77 @@ class BackendClientPool:
         mode: InvalidationMode,
     ) -> InvalidationResult:
         self._confirmed_auth_generation.pop(change.target_id, None)
+        cancelled = 0
+        if mode is InvalidationMode.CANCEL:
+            self._cancelled_before[change.target_id] = max(
+                self._cancelled_before.get(change.target_id, change.current_generation),
+                change.current_generation,
+            )
+            cancelled = await self._cancel_calls(tuple(
+                task for task, generation in self._calls.get(change.target_id, {}).items()
+                if generation < change.current_generation
+            ))
         async with self._lock:
             client = self._clients.get(change.target_id)
-            if client is None:
-                return InvalidationResult(change, mode, 0, 0)
-            if client.configuration_generation >= change.current_generation:
-                return InvalidationResult(change, mode, 0, 0)
-            inflight = client.mark_closed()
-            self._clients.pop(change.target_id, None)
-            self._trust.pop(change.target_id, None)
-        if mode is InvalidationMode.CANCEL:
-            cancelled = await client.cancel()
-            drained = 0
-        else:
-            await client.drain()
-            drained = inflight
-            cancelled = 0
-        await client.aclose()
-        return InvalidationResult(change, mode, drained, cancelled)
+            inflight = 0
+            if client is not None and client.configuration_generation < change.current_generation:
+                inflight = self._retire(change.target_id, client)
+                self._clients.pop(change.target_id)
+                self._trust.pop(change.target_id, None)
+            unsettled = tuple(
+                (client, task)
+                for client, task in self._unsettled.get(change.target_id, {}).items()
+                if client.configuration_generation < change.current_generation
+            )
+        for client, task in unsettled:
+            if mode is InvalidationMode.CANCEL:
+                cancelled += await client.cancel()
+            await asyncio.shield(task)
+        return InvalidationResult(
+            change, mode, inflight if mode is InvalidationMode.DRAIN else 0, cancelled
+        )
 
     async def aclose(self) -> None:
         async with self._lock:
             clients = tuple(self._clients.values())
             self._clients.clear()
             self._trust.clear()
+            pending = tuple(
+                task for clients in self._unsettled.values() for task in clients.values()
+            )
         for client in clients:
             client.mark_closed()
             await client.aclose()
+        for task in pending:
+            await asyncio.shield(task)
 
     async def invalidate_all(self, *, mode: InvalidationMode) -> None:
         """Discard every cached client after appliance trust changes."""
 
+        if mode is InvalidationMode.CANCEL:
+            await self._cancel_calls(tuple(
+                task for calls in self._calls.values() for task in calls
+            ))
         async with self._lock:
-            clients = tuple(self._clients.values())
+            for target_id, client in self._clients.items():
+                self._retire(target_id, client)
             self._clients.clear()
             self._trust.clear()
             self._confirmed_auth_generation.clear()
-            for client in clients:
-                client.mark_closed()
+            unsettled = tuple(
+                (client, task)
+                for clients in self._unsettled.values()
+                for client, task in clients.items()
+            )
         failures: list[Exception] = []
-        for client in clients:
+        for client, task in unsettled:
             try:
                 if mode is InvalidationMode.CANCEL:
                     await client.cancel()
-                else:
-                    await client.drain()
             except Exception as exc:
                 failures.append(exc)
             try:
-                await client.aclose()
+                await asyncio.shield(task)
             except Exception as exc:
                 failures.append(exc)
         if failures:

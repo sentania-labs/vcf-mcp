@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ preview.target.name }} | VCF MCP Admin{% endblock %}
+{% block content %}
+<h1>Delete target</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card warning" aria-labelledby="target-delete-heading">
+  <h2 id="target-delete-heading">Delete {{ preview.target.name }}?</h2>
+  <p>This action is destructive and cannot be undone.</p>
+  <dl>
+    <dt><strong>Target</strong></dt>
+    <dd>{{ preview.target.name }} ({{ preview.target.fqdn }})</dd>
+    <dt><strong>Product backend</strong></dt>
+    <dd>{{ preview.target.backend.value }}</dd>
+  </dl>
+
+  <h3>API keys that will be revoked</h3>
+  {% if preview.revoked_keys %}
+  <table>
+    <thead><tr><th>Name</th><th>ID</th><th>Backends covered</th><th>Endpoint scope</th></tr></thead>
+    <tbody>
+    {% for api_key in preview.revoked_keys %}
+      <tr>
+        <td><strong>{{ api_key.label }}</strong></td>
+        <td><code>{{ api_key.key_id }}</code></td>
+        <td>{{ api_key.backends|join(", ") }}</td>
+        <td>{% for endpoint in api_key.allowed_endpoints %}<code>/{{ endpoint }}/mcp</code>{{ ", " if not loop.last else "" }}{% endfor %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No active API keys are scoped to this target.</p>
+  {% endif %}
+
+  {% if preview.last_target_for_backend %}
+  <p><strong>This is the last {{ preview.target.backend.value }} target.</strong> The endpoint stays mounted until the next explicit restart, but this target becomes unusable immediately. Restart is required, and the endpoint disappears after restart.</p>
+  {% else %}
+  <p>Other {{ preview.target.backend.value }} targets remain, so the product endpoint stays available.</p>
+  {% endif %}
+
+  <form method="post" action="/admin/targets/{{ preview.target.id }}/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="target_deletion_digest" value="{{ preview.confirmation_digest }}">
+    <label><input type="checkbox" name="confirm_delete"> I reviewed the target and every key above, and confirm deletion and revocation</label>
+    <button class="danger" type="submit">Delete target and revoke {{ preview.revoked_keys|length }} key{{ 's' if preview.revoked_keys|length != 1 else '' }}</button>
+  </form>
+</section>
+
+<p><a href="/admin?tab=targets">Cancel and return to Targets</a></p>
+{% endblock %}

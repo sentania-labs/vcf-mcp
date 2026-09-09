@@ -117,12 +117,9 @@ register's entry for this slice and it is unchanged.
 
 ## Target edit: drain or cancel
 
-The client half of `contracts.py`'s target-configuration-generation protocol.
-On an admin edit, after `TargetRepository.save` and before reporting success,
-the admin flow awaits `TargetClientRegistry.invalidate`.
+`TargetClientInvalidator` in `src/vcf_mcp/contracts.py` owns the
+target-configuration-generation protocol and the admin invalidation barrier.
 
-- The client for the previous generation is marked closed synchronously, so it
-  accepts no new work from that instant.
 - `DRAIN` lets already-started requests finish their transfer, then refuses
   their results with `TargetConfigurationSuperseded`, which is retryable. That
   refusal is `contracts.py`'s stated obligation: a generation mismatch discards
@@ -134,8 +131,9 @@ the admin flow awaits `TargetClientRegistry.invalidate`.
   verification, because continuing a transfer over an unverified connection
   after the operator turned verification on is precisely the thing the operator
   just took away.
-- Either way the closed client is removed and its transport closed, and a later
-  lookup lazily creates a client only for the new generation.
+
+[Decision 027](decisions/027-last-target-endpoint-retirement.md) owns the shared
+backend pool's cancellation boundary and its use during target deletion.
 
 A caller that receives `TargetConfigurationSuperseded` re-reads the target and
 re-issues. It never receives a body fetched with credentials or a TLS policy

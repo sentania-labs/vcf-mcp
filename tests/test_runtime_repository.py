@@ -29,6 +29,7 @@ from vcf_mcp.runtime_repository import (
     PRODUCTION_FQDN,
     RuntimeRepository,
     RuntimeStoreUnavailable,
+    TargetDeletionStateChanged,
 )
 
 SCOPES = frozenset(
@@ -483,6 +484,261 @@ async def test_mode_switch_revokes_every_key_and_gateway_is_one_key_per_endpoint
         event for event in events if event["event_type"] == "authorization_mode_changed"
     )
     assert mode_event["details"]["revoked_key_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_revokes_scoped_keys_and_records_exact_impact(
+    repository: RuntimeRepository,
+) -> None:
+    vcenter = await repository.create_target(
+        name="vcenter-lab",
+        fqdn="vcenter.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+        backend=BackendKind.VCENTER,
+    )
+    nsx = await repository.create_target(
+        name="nsx-lab",
+        fqdn="nsx.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+        backend=BackendKind.NSX,
+    )
+    await repository.set_authorization_mode(AuthorizationMode.GATEWAY)
+    shared_key = await repository.create_api_key(
+        label="shared-estate",
+        scopes=SCOPES,
+        allowed_targets=frozenset({vcenter.id, nsx.id}),
+        allowed_endpoints=frozenset({"vcf"}),
+    )
+    vcenter_key = await repository.create_api_key(
+        label="vcenter-only",
+        scopes=SCOPES,
+        allowed_targets=frozenset({vcenter.id}),
+        allowed_endpoints=frozenset({"vcenter"}),
+    )
+    nsx_key = await repository.create_api_key(
+        label="nsx-only",
+        scopes=SCOPES,
+        allowed_targets=frozenset({nsx.id}),
+        allowed_endpoints=frozenset({"nsx"}),
+    )
+    repository.set_restart_required_at_startup(False)
+
+    preview = await repository.preview_target_deletion(vcenter.id)
+
+    assert preview is not None
+    assert preview.last_target_for_backend is True
+    assert [key.label for key in preview.revoked_keys] == [
+        "shared-estate",
+        "vcenter-only",
+    ]
+    assert preview.revoked_keys[0].backends == ("nsx", "vcenter")
+    assert preview.revoked_keys[0].allowed_endpoints == ("vcf",)
+
+    result = await repository.delete_target(
+        vcenter.id,
+        expected_confirmation_digest=preview.confirmation_digest,
+    )
+
+    assert result.target == vcenter
+    assert result.last_target_for_backend is True
+    assert await repository.get(vcenter.id) is None
+    assert (await repository.resolve_request_identity(shared_key)).revoked is True
+    assert (await repository.resolve_request_identity(vcenter_key)).revoked is True
+    assert (await repository.resolve_request_identity(nsx_key)).revoked is False
+    assert await repository.restart_required() is True
+
+    events = await repository.configuration_events(limit=20)
+    deletion = next(
+        event for event in events if event["event_type"] == "target_deleted"
+    )
+    assert deletion["details"] == {
+        "backend": "vcenter",
+        "last_target_for_backend": True,
+        "restart_required": True,
+        "revoked_key_count": 2,
+        "revoked_key_ids": [str(key.key_id) for key in preview.revoked_keys],
+        "target_id": str(vcenter.id),
+        "target_name": "vcenter-lab",
+    }
+    caused_revocations = [
+        event
+        for event in events
+        if event["event_type"] == "api_key_revoked"
+        and event["details"].get("reason") == "target_deleted"
+    ]
+    assert len(caused_revocations) == 2
+    assert {event["details"]["key_label"] for event in caused_revocations} == {
+        "shared-estate",
+        "vcenter-only",
+    }
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_is_atomic_when_the_delete_fails(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="atomic-target",
+        fqdn="atomic.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+        backend=BackendKind.VCENTER,
+    )
+    presented_key = await repository.create_api_key(
+        label="atomic-key",
+        scopes=SCOPES,
+        allowed_targets=frozenset({target.id}),
+        allowed_endpoints=frozenset({"vcenter"}),
+    )
+    preview = await repository.preview_target_deletion(target.id)
+    assert preview is not None
+    with sqlite3.connect(repository.database_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER fail_fixture_target_delete BEFORE DELETE ON targets "
+            "BEGIN SELECT RAISE(ABORT, 'fixture delete failure'); END"
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="fixture delete failure"):
+        await repository.delete_target(
+            target.id,
+            expected_confirmation_digest=preview.confirmation_digest,
+        )
+
+    assert await repository.get(target.id) == target
+    assert (await repository.resolve_request_identity(presented_key)).revoked is False
+    events = await repository.configuration_events(limit=20)
+    assert not any(event["event_type"] == "target_deleted" for event in events)
+    assert not any(
+        event["event_type"] == "api_key_revoked"
+        and event["details"].get("reason") == "target_deleted"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_refuses_a_stale_key_impact_preview(
+    repository: RuntimeRepository,
+) -> None:
+    target = await repository.create_target(
+        name="stale-target",
+        fqdn="stale.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    first_key = await repository.create_api_key(
+        label="first-key",
+        scopes=SCOPES,
+        allowed_targets=frozenset({target.id}),
+        allowed_endpoints=frozenset({"ops"}),
+    )
+    preview = await repository.preview_target_deletion(target.id)
+    assert preview is not None
+    second_key = await repository.create_api_key(
+        label="later-key",
+        scopes=SCOPES,
+        allowed_targets=frozenset({target.id}),
+        allowed_endpoints=frozenset({"ops"}),
+    )
+
+    with pytest.raises(TargetDeletionStateChanged, match="changed since the preview"):
+        await repository.delete_target(
+            target.id,
+            expected_confirmation_digest=preview.confirmation_digest,
+        )
+
+    assert await repository.get(target.id) == target
+    assert (await repository.resolve_request_identity(first_key)).revoked is False
+    assert (await repository.resolve_request_identity(second_key)).revoked is False
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_refuses_preview_when_last_target_status_changes(
+    repository: RuntimeRepository,
+) -> None:
+    first = await repository.create_target(
+        name="first-target",
+        fqdn="first.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    second = await repository.create_target(
+        name="second-target",
+        fqdn="second.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    second_preview = await repository.preview_target_deletion(second.id)
+    first_preview = await repository.preview_target_deletion(first.id)
+    assert second_preview is not None
+    assert first_preview is not None
+    assert second_preview.last_target_for_backend is False
+
+    await repository.delete_target(
+        first.id,
+        expected_confirmation_digest=first_preview.confirmation_digest,
+    )
+
+    with pytest.raises(TargetDeletionStateChanged, match="changed since the preview"):
+        await repository.delete_target(
+            second.id,
+            expected_confirmation_digest=second_preview.confirmation_digest,
+        )
+
+    assert await repository.get(second.id) == second
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_ignores_unusable_endpoint_survivors(
+    repository: RuntimeRepository,
+) -> None:
+    retiring = await repository.create_target(
+        name="retiring-target",
+        fqdn="retiring.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    unusable = await repository.create_target(
+        name="unusable-target",
+        fqdn="unusable.example.internal",
+        username="synthetic-reader",
+        password="synthetic-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    with sqlite3.connect(repository.database_path) as connection:
+        connection.execute(
+            "UPDATE targets SET unusable_reason = ? WHERE id = ?",
+            ("credential_integrity_failure", str(unusable.id)),
+        )
+
+    preview = await repository.preview_target_deletion(retiring.id)
+
+    assert preview is not None
+    assert preview.last_target_for_backend is True
+
+    result = await repository.delete_target(
+        retiring.id,
+        expected_confirmation_digest=preview.confirmation_digest,
+    )
+
+    assert result.last_target_for_backend is True
+    assert await repository.restart_required() is True
 
 
 @pytest.mark.asyncio

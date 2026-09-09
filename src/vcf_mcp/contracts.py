@@ -396,12 +396,13 @@ class InvalidationResult:
 class TargetClientInvalidator(Protocol):
     """Invalidation barrier shared by admin writes and the client registry.
 
-    The admin edit flow must await this method after ``TargetRepository.save``
-    and before reporting success. On entry, the registry atomically marks the
-    client for ``previous_generation`` closed so it accepts no new work. Before
-    returning, DRAIN waits for its in-flight work to finish and CANCEL cancels
-    and awaits it. The registry then removes that client. A later lookup may
-    lazily create only a client for ``current_generation``.
+    Admin writes await this method after committing the configuration change
+    and before reporting success. Retired clients accept no new work. DRAIN
+    waits for their in-flight work to finish; CANCEL cancels and awaits it.
+    A later lookup may lazily create a client for the current generation only
+    while the target still exists. The shared backend pool's wider cancellation
+    boundary, including queued calls and older draining clients, is specified
+    in docs/decisions/027-last-target-endpoint-retirement.md.
 
     Every consumer snapshots ``TargetRecord.configuration_generation`` before
     I/O and compares it with the repository generation before retry and before
