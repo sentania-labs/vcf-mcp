@@ -994,3 +994,92 @@ def test_login_retries_leftover_bootstrap_cleanup(tmp_path: Path) -> None:
     finally:
         runtime.close()
         audit.close()
+
+
+def test_recovery_invalidates_session_and_banner_persists_until_audited_dismissal(
+    tmp_path: Path,
+) -> None:
+    recovery = tmp_path / "keys" / "admin_recovery_password"
+    runtime = RuntimeRepository(
+        tmp_path / "data" / "config.sqlite3",
+        tmp_path / "keys" / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+        recovery_password_path=recovery,
+    )
+    runtime.bootstrap()
+    asyncio.run(runtime.set_admin_password_for_test("synthetic-original-password"))
+    audit = SqliteAuditRepository(tmp_path / "audit" / "audit.sqlite3")
+    audit.bootstrap(recovered_at=datetime.now(UTC))
+    app = create_app(
+        audit_repository=audit,
+        target_verifier=successful_target_verifier(audit),
+        session_secret="synthetic-session-secret-with-at-least-32-bytes",
+        runtime_repository=runtime,
+        mcp_ready=True,
+    )
+
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            login = client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-original-password",
+                },
+                follow_redirects=False,
+            )
+            assert login.status_code == 303
+            recovery.parent.mkdir(parents=True, exist_ok=True)
+            recovery.write_text("synthetic-recovered-password")
+            recovery.chmod(0o600)
+            assert runtime.recover_admin_from_file_at_startup() is True
+
+            stale = client.get("/admin", follow_redirects=False)
+            assert stale.status_code == 303
+            assert stale.headers["location"] == "/admin/login?tab=overview"
+            old_password = client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-original-password",
+                },
+            )
+            assert old_password.status_code == 401
+            recovered_login = client.post(
+                "/admin/login",
+                data={
+                    "username": "admin",
+                    "password": "synthetic-recovered-password",
+                },
+                follow_redirects=False,
+            )
+            assert recovered_login.status_code == 303
+            dashboard = client.get(recovered_login.headers["location"])
+            assert "Administrator access was recovered" in dashboard.text
+            assert "MCP API keys were preserved" in dashboard.text
+            recovered_at = asyncio.run(runtime.admin_recovery_notice())
+            assert recovered_at is not None
+            assert recovered_at in dashboard.text
+
+            csrf = re.search(
+                r'name="csrf_token" value="([^"]+)"', dashboard.text
+            )
+            assert csrf is not None
+            dismissed = client.post(
+                "/admin/recovery-notice/dismiss",
+                data={"csrf_token": csrf.group(1)},
+                follow_redirects=False,
+            )
+            assert dismissed.status_code == 303
+            assert "Administrator access was recovered" not in client.get(
+                dismissed.headers["location"]
+            ).text
+
+        events = asyncio.run(runtime.configuration_events(limit=2))
+        assert [event["event_type"] for event in events] == [
+            "admin_recovery_notice_dismissed",
+            "admin_password_recovered",
+        ]
+    finally:
+        runtime.close()
+        audit.close()

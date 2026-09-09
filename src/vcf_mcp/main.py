@@ -199,6 +199,22 @@ def create_production_app(
             "runtime configuration store ready at %s",
             runtime_repository.database_path,
         )
+        try:
+            recovered = runtime_repository.recover_admin_from_file_at_startup()
+        except Exception as exc:
+            _record_startup_error(
+                startup_errors,
+                "admin_recovery",
+                "admin recovery file was refused; starting degraded",
+                exc,
+            )
+            configuration_ready = False
+        else:
+            if recovered:
+                LOGGER.warning(
+                    "admin recovery completed; API keys were preserved and all"
+                    " console sessions were invalidated"
+                )
 
     pack_trust_manager = None
     pack_trust_ready = configuration_ready

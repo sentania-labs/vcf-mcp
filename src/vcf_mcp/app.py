@@ -102,6 +102,7 @@ class StructuralAuditMiddleware(BaseHTTPMiddleware):
         "/admin/credential-rotation",
         "/admin/packs",
         "/admin/restart",
+        "/admin/recovery-notice/dismiss",
     )
 
     async def dispatch(self, request: Request, call_next):

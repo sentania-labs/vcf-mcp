@@ -33,8 +33,9 @@ needed.
 A private file must remain a regular file owned by the effective service uid.
 Ownership by any other uid is refused before any repair is attempted.
 
-When an owned file has group or other permissions, startup first attempts to
-change it to `0600`. Successful correction is logged with the path and prior
+Under the default private-file policy, startup first attempts to change an
+owned file with group or other permissions to `0600`. Successful correction
+is logged with the path and prior
 mode. If correction fails, any `other` permission causes refusal with the path,
 mode, cause, and remediation. Group permissions alone are accepted and logged
 only when the file's group is the process effective group or one of its
@@ -42,6 +43,9 @@ supplementary groups. This verifies that group access represents the service's
 Kubernetes `fsGroup` boundary rather than access outside that boundary. An
 unrelated file group is refused with the file gid, the service gids, and
 remediation.
+
+The administrator recovery file is an exception governed by
+[decision 026](026-admin-access-recovery.md), not this repair and fallback policy.
 
 New session secrets, audit digest keys, and credential keyrings continue to be
 written atomically with mode `0600`. Startup failures remain degraded and

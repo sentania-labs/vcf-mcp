@@ -94,6 +94,46 @@ class ProductionAppTests(unittest.TestCase):
             create_production_app()
         self.assertTrue(path.exists())
 
+    def test_production_startup_consumes_admin_recovery_file(self) -> None:
+        environment = self.environment()
+        recovery = self.root / "keys" / "admin_recovery_password"
+        repository = RuntimeRepository(
+            Path(environment["CONFIG_DB_PATH"]),
+            Path(environment["CREDENTIAL_KEYRING_PATH"]),
+            grantable_scopes=frozenset(),
+            bootstrap_password_path=Path(environment["ADMIN_BOOTSTRAP_PASSWORD_FILE"]),
+            recovery_password_path=recovery,
+        )
+        repository.bootstrap()
+        asyncio.run(
+            repository.set_admin_password_for_test("synthetic-original-password")
+        )
+        repository.close()
+        recovery.parent.mkdir(parents=True, exist_ok=True)
+        recovery.write_text("synthetic-recovered-password")
+        recovery.chmod(0o600)
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch(
+                "vcf_mcp.runtime_repository.DEFAULT_ADMIN_RECOVERY_PASSWORD_FILE",
+                recovery,
+            ),
+        ):
+            app = create_production_app()
+            with TestClient(app) as client:
+                response = client.post(
+                    "/admin/login",
+                    data={
+                        "username": "admin",
+                        "password": "synthetic-recovered-password",
+                    },
+                    follow_redirects=False,
+                )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertFalse(recovery.exists())
+
     def test_all_target_integrity_failure_refuses_startup(self) -> None:
         environment = self.environment()
         repository = RuntimeRepository(

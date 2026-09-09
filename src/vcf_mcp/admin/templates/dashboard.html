@@ -11,6 +11,16 @@
   </form>
 </div>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if admin_recovery_notice %}
+<section class="card warning" role="status" aria-labelledby="recovery-notice-heading">
+  <h2 id="recovery-notice-heading">Administrator access was recovered</h2>
+  <p>The admin password was replaced at <strong>{{ admin_recovery_notice }}</strong>. All earlier admin sessions were invalidated. MCP API keys were preserved.</p>
+  <form method="post" action="/admin/recovery-notice/dismiss">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Acknowledge and dismiss</button>
+  </form>
+</section>
+{% endif %}
 
 <nav class="tabs" aria-label="Administration areas">
   <a href="/admin?tab=overview" {% if active_tab == "overview" %}aria-current="page"{% endif %}>Overview</a>

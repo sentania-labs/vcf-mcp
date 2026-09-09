@@ -49,7 +49,9 @@ def verify_password(password: str, hashed_password: str) -> bool:
         return False
 
 
-def initialize_session(request: Request, user_id: str) -> None:
+def initialize_session(
+    request: Request, user_id: str, *, session_generation: int = 0
+) -> None:
     request.session.clear()
     request.session["user_id"] = user_id
     now = time.time()
@@ -57,6 +59,7 @@ def initialize_session(request: Request, user_id: str) -> None:
     request.session["auth_time"] = now
     request.session["csrf_token"] = secrets.token_urlsafe(32)
     request.session["session_id"] = secrets.token_urlsafe(32)
+    request.session["admin_session_generation"] = session_generation
 
 
 def enforce_idle_timeout(request: Request) -> RedirectResponse | None:
