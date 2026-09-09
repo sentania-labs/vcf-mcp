@@ -13,7 +13,9 @@ Recovery has these effects:
 
 The recovery file is `/keys/admin_recovery_password`. It must be a regular file owned by UID 10001, mode `0600`, containing one UTF-8 line of at least 16 bytes with no trailing newline. The filename is deliberately different from `/keys/admin_bootstrap_password`. A leftover bootstrap mount cannot recover an initialized appliance.
 
-The application reads the recovery file only at startup and removes it after a successful transaction. An empty, multiline, invalid UTF-8, oversized, wrongly owned, group-readable, or world-readable file is refused. The health endpoint reports `admin_recovery` in `startup_errors`, and the prior password remains valid when refusal happens before the recovery transaction.
+The application reads the recovery file only at startup and removes it after validation, before hashing the password and beginning the database transaction. This consumes the file even if recovery fails later. If the database transaction fails, the prior password remains valid, but the operator must stage a new recovery file before restarting to retry recovery.
+
+An empty, multiline, invalid UTF-8, oversized, wrongly owned, group-readable, or world-readable file is refused. If validation or file removal fails, the password hash and session generation remain unchanged. The health endpoint reports `admin_recovery` in `startup_errors`.
 
 ## Docker Compose
 
