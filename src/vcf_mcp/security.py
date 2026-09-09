@@ -108,12 +108,14 @@ def atomic_private_text_write(path: Path, value: str) -> None:
     _atomic_private_write(path, value)
 
 
-def read_private_text(path: Path) -> str:
-    return _read_private_text(path)
+def read_private_text(path: Path, *, require_owner_only: bool = False) -> str:
+    return _read_private_text(path, require_owner_only=require_owner_only)
 
 
-def validate_private_file(path: Path) -> os.stat_result:
-    """Require an owned regular file with no access outside its service group."""
+def validate_private_file(
+    path: Path, *, require_owner_only: bool = False
+) -> os.stat_result:
+    """Require an owned regular file within the selected permission boundary."""
 
     try:
         details = path.stat(follow_symlinks=False)
@@ -128,6 +130,10 @@ def validate_private_file(path: Path) -> os.stat_result:
         )
 
     mode = stat.S_IMODE(details.st_mode)
+    if require_owner_only and mode != PRIVATE_FILE_MODE:
+        raise SecretStoreUnavailable(
+            f"private file {path} has mode {mode:04o}; set mode to 0600"
+        )
     if mode & GROUP_OR_OTHER_ACCESS:
         try:
             os.chmod(path, PRIVATE_FILE_MODE, follow_symlinks=False)
@@ -198,8 +204,8 @@ def _validate_secret(value: str) -> None:
         )
 
 
-def _read_private_text(path: Path) -> str:
-    raw = _read_private_bytes(path)
+def _read_private_text(path: Path, *, require_owner_only: bool = False) -> str:
+    raw = _read_private_bytes(path, require_owner_only=require_owner_only)
     try:
         value = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -207,8 +213,8 @@ def _read_private_text(path: Path) -> str:
     return value
 
 
-def _read_private_bytes(path: Path) -> bytes:
-    details = validate_private_file(path)
+def _read_private_bytes(path: Path, *, require_owner_only: bool = False) -> bytes:
+    details = validate_private_file(path, require_owner_only=require_owner_only)
     if details.st_size > 16 * 1024:
         raise SecretStoreUnavailable(f"private file is unexpectedly large: {path}")
     try:

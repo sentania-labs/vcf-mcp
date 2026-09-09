@@ -216,7 +216,7 @@ the password and submit the change again.
 | Volume path | Contents |
 | --- | --- |
 | `/data` | Runtime SQLite database with the admin hash, target metadata, encrypted credential and target CA envelopes, the appliance CA, API-key digests, operator packs, and the persisted refreshed pack trust root |
-| `/keys` | Session secret, audit digest key, AES-256-GCM credential keyring, and optional one-use admin bootstrap file |
+| `/keys` | Session secret, audit digest key, AES-256-GCM credential keyring, optional one-use admin bootstrap file, and the startup-only admin recovery file |
 | `/audit` | Append-only SQLite audit ledger |
 
 Back up `/data`, `/keys`, and `/audit` as separate protected artifacts. The
@@ -226,6 +226,13 @@ test restores a database artifact with a separately held keyring. Losing
 The server refuses to regenerate the credential keyring over existing
 ciphertext. Do not use `docker compose down -v` for an established deployment.
 Use the admin UI to run credential-key rotation in resumable batches.
+
+If the console admin password is lost, use the platform-controlled
+[administrator recovery ceremony](docs/admin-recovery.md). It requires a
+distinct one-use `/keys/admin_recovery_password` file while the appliance is
+stopped. Recovery preserves MCP API keys, invalidates every console session,
+and leaves backend credentials untouched. The runbook covers both Compose and
+Kubernetes.
 
 See [docs/SPEC.md](docs/SPEC.md), [docs/PROTOTYPE.md](docs/PROTOTYPE.md), and
 the accepted [decision records](docs/decisions) for the governing contracts and

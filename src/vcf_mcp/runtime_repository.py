@@ -23,7 +23,7 @@ import threading
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cryptography import x509
@@ -55,6 +55,7 @@ from vcf_mcp.vcf.client import TargetCredentials
 DEFAULT_CONFIG_DB_PATH = Path("/data/config.sqlite3")
 DEFAULT_CREDENTIAL_KEYRING_PATH = Path("/keys/credential_keyring.json")
 DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE = Path("/keys/admin_bootstrap_password")
+DEFAULT_ADMIN_RECOVERY_PASSWORD_FILE = Path("/keys/admin_recovery_password")
 PRODUCTION_FQDN = "vcf-lab-operations.int.sentania.net"
 SCHEMA_VERSION = 7
 ENVELOPE_SCHEMA_VERSION = 2
@@ -141,11 +142,15 @@ class RuntimeRepository:
         *,
         grantable_scopes: frozenset[CapabilityName],
         bootstrap_password_path: Path | None = None,
+        recovery_password_path: Path | None = None,
     ) -> None:
         self.database_path = database_path
         self.keyring_path = keyring_path
         self.bootstrap_password_path = (
             bootstrap_password_path or DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE
+        )
+        self.recovery_password_path = (
+            recovery_password_path or DEFAULT_ADMIN_RECOVERY_PASSWORD_FILE
         )
         self._grantable_scopes = grantable_scopes
         self._connection: sqlite3.Connection | None = None
@@ -226,6 +231,20 @@ class RuntimeRepository:
 
     async def verify_admin_password(self, password: str) -> bool:
         return await asyncio.to_thread(self._verify_admin_password_sync, password)
+
+    def recover_admin_from_file_at_startup(self) -> bool:
+        """Consume the recovery password file during process startup only."""
+
+        return self._recover_admin_from_file_sync()
+
+    async def admin_session_generation(self) -> int:
+        return await asyncio.to_thread(self._admin_session_generation_sync)
+
+    async def admin_recovery_notice(self) -> str | None:
+        return await asyncio.to_thread(self._admin_recovery_notice_sync)
+
+    async def dismiss_admin_recovery_notice(self) -> bool:
+        return await asyncio.to_thread(self._dismiss_admin_recovery_notice_sync)
 
     async def get(self, target_id: TargetId) -> TargetRecord | None:
         return await asyncio.to_thread(self._get_sync, target_id)
@@ -751,6 +770,10 @@ class RuntimeRepository:
             "INSERT INTO settings(name, value) VALUES"
             " ('authorization_mode', 'local') ON CONFLICT(name) DO NOTHING"
         )
+        connection.execute(
+            "INSERT INTO settings(name, value) VALUES"
+            " ('admin_session_generation', '0') ON CONFLICT(name) DO NOTHING"
+        )
         connection.commit()
 
     def _load_or_create_keyring(self, *, refuse_generation: bool) -> None:
@@ -935,6 +958,136 @@ class RuntimeRepository:
                 .fetchone()
             )
             return bool(row and verify_password(password, row[0]))
+
+    def _recover_admin_from_file_sync(self) -> bool:
+        try:
+            os.lstat(self.recovery_password_path)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise RuntimeStoreUnavailable(
+                f"cannot inspect admin recovery file {self.recovery_password_path}"
+            ) from exc
+        try:
+            password = read_private_text(
+                self.recovery_password_path, require_owner_only=True
+            )
+        except SecretStoreUnavailable as exc:
+            raise RuntimeStoreUnavailable(
+                f"admin recovery password file was refused: {exc}"
+            ) from exc
+        if "\n" in password or "\r" in password:
+            raise RuntimeStoreUnavailable(
+                "admin recovery password file must contain one UTF-8 line"
+            )
+        if len(password.encode("utf-8")) < MINIMUM_ADMIN_PASSWORD_BYTES:
+            raise RuntimeStoreUnavailable(
+                "admin recovery password must contain at least 16 bytes"
+            )
+
+        self._remove_recovery_password_file_sync()
+        password_hash = hash_password(password)
+        recovered_at = datetime.now(UTC).isoformat()
+        with self._write_transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT value FROM settings WHERE name = 'admin_password_hash'"
+            ).fetchone()
+            if existing is None:
+                raise RuntimeStoreUnavailable(
+                    "admin recovery cannot initialize the first administrator;"
+                    " use first-run bootstrap"
+                )
+            generation_row = connection.execute(
+                "SELECT value FROM settings"
+                " WHERE name = 'admin_session_generation'"
+            ).fetchone()
+            generation = int(generation_row[0]) if generation_row is not None else 0
+            connection.execute(
+                "UPDATE settings SET value = ? WHERE name = 'admin_password_hash'",
+                (password_hash,),
+            )
+            connection.execute(
+                "INSERT INTO settings(name, value) VALUES"
+                " ('admin_session_generation', ?)"
+                " ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                (str(generation + 1),),
+            )
+            connection.execute(
+                "INSERT INTO settings(name, value) VALUES"
+                " ('admin_recovery_notice_at', ?)"
+                " ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                (recovered_at,),
+            )
+            self._append_configuration_event_sync(
+                connection,
+                "admin_password_recovered",
+                {
+                    "api_keys_preserved": True,
+                    "recovered_at": recovered_at,
+                    "sessions_invalidated": True,
+                },
+            )
+            connection.commit()
+        LOGGER.warning(
+            "admin password recovery consumed at %s; all admin sessions invalidated",
+            recovered_at,
+        )
+        return True
+
+    def _remove_recovery_password_file_sync(self) -> None:
+        try:
+            self.recovery_password_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeStoreUnavailable(
+                "admin password was recovered but recovery file could not be removed"
+            ) from exc
+
+    def _admin_session_generation_sync(self) -> int:
+        with self._lock:
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings"
+                    " WHERE name = 'admin_session_generation'"
+                )
+                .fetchone()
+            )
+            return int(row[0]) if row is not None else 0
+
+    def _admin_recovery_notice_sync(self) -> str | None:
+        with self._lock:
+            row = (
+                self._connection_or_raise()
+                .execute(
+                    "SELECT value FROM settings"
+                    " WHERE name = 'admin_recovery_notice_at'"
+                )
+                .fetchone()
+            )
+            return None if row is None else str(row[0])
+
+    def _dismiss_admin_recovery_notice_sync(self) -> bool:
+        with self._write_transaction() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT value FROM settings"
+                " WHERE name = 'admin_recovery_notice_at'"
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return False
+            recovered_at = str(row[0])
+            connection.execute(
+                "DELETE FROM settings WHERE name = 'admin_recovery_notice_at'"
+            )
+            self._append_configuration_event_sync(
+                connection,
+                "admin_recovery_notice_dismissed",
+                {"recovered_at": recovered_at},
+            )
+            connection.commit()
+            return True
 
     def _get_sync(self, target_id: TargetId) -> TargetRecord | None:
         with self._lock:

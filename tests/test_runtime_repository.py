@@ -24,6 +24,8 @@ from vcf_mcp.contracts import (
 )
 from vcf_mcp.runtime_repository import (
     AllTargetsIntegrityFailed,
+    DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE,
+    DEFAULT_ADMIN_RECOVERY_PASSWORD_FILE,
     PRODUCTION_FQDN,
     RuntimeRepository,
     RuntimeStoreUnavailable,
@@ -63,6 +65,7 @@ def repository(tmp_path: Path):
         tmp_path / "keys" / "credential_keyring.json",
         grantable_scopes=SCOPES,
         bootstrap_password_path=tmp_path / "keys" / "admin_bootstrap_password",
+        recovery_password_path=tmp_path / "keys" / "admin_recovery_password",
     )
     repo.bootstrap()
     yield repo
@@ -864,6 +867,142 @@ async def test_permissive_bootstrap_password_file_is_corrected_and_consumed(
     assert await repository.initialize_admin_from_bootstrap_file() is True
     assert await repository.has_admin() is True
     assert not path.exists()
+
+
+def test_bootstrap_and_recovery_password_files_are_distinct() -> None:
+    assert DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE.name == "admin_bootstrap_password"
+    assert DEFAULT_ADMIN_RECOVERY_PASSWORD_FILE.name == "admin_recovery_password"
+    assert DEFAULT_ADMIN_BOOTSTRAP_PASSWORD_FILE != DEFAULT_ADMIN_RECOVERY_PASSWORD_FILE
+
+
+@pytest.mark.asyncio
+async def test_admin_recovery_is_single_use_audited_and_preserves_api_keys(
+    repository: RuntimeRepository,
+) -> None:
+    await repository.set_admin_password_for_test("synthetic-original-password")
+    target = await repository.create_target(
+        name="recovery-target",
+        fqdn="recovery.example.internal",
+        username="synthetic-reader",
+        password="synthetic-target-password",
+        auth_source="LOCAL",
+        verify_ssl=False,
+    )
+    key = await repository.create_api_key(
+        label="preserved-key",
+        scopes=SCOPES,
+        allowed_targets=frozenset({target.id}),
+    )
+    original_generation = await repository.admin_session_generation()
+    path = repository.recovery_password_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("synthetic-recovered-password")
+    path.chmod(0o600)
+
+    assert repository.recover_admin_from_file_at_startup() is True
+    assert not path.exists()
+    assert not await repository.verify_admin_password("synthetic-original-password")
+    assert await repository.verify_admin_password("synthetic-recovered-password")
+    assert await repository.admin_session_generation() == original_generation + 1
+    assert await repository.resolve_request_identity(key) is not None
+    notice = await repository.admin_recovery_notice()
+    assert notice is not None
+    events = await repository.configuration_events(limit=5)
+    recovery_event = events[0]
+    assert recovery_event["event_type"] == "admin_password_recovered"
+    assert recovery_event["details"] == {
+        "api_keys_preserved": True,
+        "recovered_at": notice,
+        "sessions_invalidated": True,
+    }
+
+    assert repository.recover_admin_from_file_at_startup() is False
+    assert await repository.admin_session_generation() == original_generation + 1
+    path.write_text("synthetic-recovered-password")
+    path.chmod(0o600)
+    assert repository.recover_admin_from_file_at_startup() is True
+    assert await repository.admin_session_generation() == original_generation + 2
+    assert await repository.dismiss_admin_recovery_notice() is True
+    assert await repository.admin_recovery_notice() is None
+    events = await repository.configuration_events(limit=3)
+    assert [event["event_type"] for event in events] == [
+        "admin_recovery_notice_dismissed",
+        "admin_password_recovered",
+        "admin_password_recovered",
+    ]
+    assert await repository.dismiss_admin_recovery_notice() is False
+
+
+@pytest.mark.parametrize(
+    ("payload", "mode", "message"),
+    [
+        (b"", 0o600, "at least 16 bytes"),
+        (b"short", 0o600, "at least 16 bytes"),
+        (b"synthetic-password\nsecond-line", 0o600, "one UTF-8 line"),
+        (b"\xff" * 20, 0o600, "not UTF-8"),
+        (b"synthetic-recovered-password", 0o400, "set mode to 0600"),
+        (b"synthetic-recovered-password", 0o644, "set mode to 0600"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_admin_recovery_refuses_malformed_or_exposed_file(
+    repository: RuntimeRepository,
+    payload: bytes,
+    mode: int,
+    message: str,
+) -> None:
+    await repository.set_admin_password_for_test("synthetic-original-password")
+    path = repository.recovery_password_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    path.chmod(mode)
+
+    with pytest.raises(RuntimeStoreUnavailable, match=message):
+        repository.recover_admin_from_file_at_startup()
+
+    assert path.exists()
+    assert await repository.verify_admin_password("synthetic-original-password")
+    assert await repository.admin_session_generation() == 0
+    assert await repository.admin_recovery_notice() is None
+    assert await repository.configuration_events(limit=5) == ()
+
+
+@pytest.mark.asyncio
+async def test_admin_recovery_refuses_dangling_symlink(
+    repository: RuntimeRepository,
+) -> None:
+    await repository.set_admin_password_for_test("synthetic-original-password")
+    path = repository.recovery_password_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(path.parent / "missing-recovery-source")
+
+    with pytest.raises(RuntimeStoreUnavailable, match="not a regular file"):
+        repository.recover_admin_from_file_at_startup()
+
+    assert path.is_symlink()
+    assert await repository.verify_admin_password("synthetic-original-password")
+    assert await repository.admin_session_generation() == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_recovery_refuses_unconsumable_file_before_database_change(
+    repository: RuntimeRepository,
+) -> None:
+    await repository.set_admin_password_for_test("synthetic-original-password")
+    path = repository.recovery_password_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("synthetic-recovered-password")
+    path.chmod(0o600)
+
+    with mock.patch.object(Path, "unlink", side_effect=OSError("synthetic failure")):
+        with pytest.raises(RuntimeStoreUnavailable, match="could not be removed"):
+            repository.recover_admin_from_file_at_startup()
+
+    assert path.exists()
+    assert await repository.verify_admin_password("synthetic-original-password")
+    assert await repository.admin_session_generation() == 0
+    assert await repository.admin_recovery_notice() is None
+    assert await repository.configuration_events(limit=5) == ()
 
 
 @pytest.mark.asyncio

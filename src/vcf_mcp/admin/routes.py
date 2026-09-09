@@ -83,6 +83,16 @@ def _repository(request: Request) -> RuntimeRepository:
     return repository
 
 
+async def _session_generation_is_current(request: Request) -> bool:
+    repository = getattr(request.app.state, "runtime_repository", None)
+    if not isinstance(repository, RuntimeRepository):
+        return True
+    session_generation = request.session.get("admin_session_generation")
+    return isinstance(session_generation, int) and session_generation == (
+        await repository.admin_session_generation()
+    )
+
+
 def _pack_manager(request: Request) -> PackTrustManager:
     manager = getattr(request.app.state, "pack_trust_manager", None)
     if not isinstance(manager, PackTrustManager):
@@ -166,6 +176,10 @@ async def require_auth(
                 url=f"/admin/login?tab={selected_tab}{discarded_query}", status_code=303
             )
         return timeout
+    if "user_id" in request.session and not await _session_generation_is_current(
+        request
+    ):
+        request.session.clear()
     if "user_id" not in request.session:
         login_url = "/admin/login"
         if tab is not None:
@@ -178,6 +192,10 @@ async def require_auth(
 
 async def get_login(request: Request):
     tab = _requested_dashboard_tab(request)
+    if "user_id" in request.session and not await _session_generation_is_current(
+        request
+    ):
+        request.session.clear()
     if "user_id" in request.session:
         return RedirectResponse(url=_dashboard_url(tab), status_code=303)
     repository = _repository(request)
@@ -252,7 +270,11 @@ async def post_login(request: Request):
             },
             status_code=401,
         )
-    auth.initialize_session(request, "admin")
+    auth.initialize_session(
+        request,
+        "admin",
+        session_generation=await repository.admin_session_generation(),
+    )
     if discarded_post:
         auth.record_discarded_post_notice(request)
     return RedirectResponse(url=_dashboard_url(tab), status_code=303)
@@ -938,6 +960,22 @@ async def post_logout(request: Request):
     return RedirectResponse(url="/admin/login", status_code=303)
 
 
+async def post_recovery_notice_dismiss(request: Request):
+    check = await require_auth(request)
+    if check:
+        return check
+    form = await request.form()
+    if not auth.verify_csrf(request, str(form.get("csrf_token", ""))):
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"message": "CSRF verification failed."},
+            status_code=403,
+        )
+    await _repository(request).dismiss_admin_recovery_notice()
+    return RedirectResponse(url=_dashboard_url("overview"), status_code=303)
+
+
 async def get_audit(request: Request):
     check = await require_auth(request)
     if check:
@@ -1011,6 +1049,7 @@ async def _dashboard_response(
             "rotation_status": await repository.rotation_status(),
             "restart_required": await repository.restart_required(),
             "configuration_events": await repository.configuration_events(limit=20),
+            "admin_recovery_notice": await repository.admin_recovery_notice(),
             "unsigned_packs_allowed": await repository.unsigned_packs_allowed(),
             "active_unsigned_packs": tuple(
                 pack.backend.value for pack in backend_packs if pack.unsigned
@@ -1049,6 +1088,11 @@ admin_routes = [
     Route("/admin/login", endpoint=_degraded_to_503(get_login), methods=["GET"]),
     Route("/admin/login", endpoint=_degraded_to_503(post_login), methods=["POST"]),
     Route("/admin/logout", endpoint=_degraded_to_503(post_logout), methods=["POST"]),
+    Route(
+        "/admin/recovery-notice/dismiss",
+        endpoint=_degraded_to_503(post_recovery_notice_dismiss),
+        methods=["POST"],
+    ),
     Route("/admin/reauth", endpoint=_degraded_to_503(get_reauth), methods=["GET"]),
     Route("/admin/reauth", endpoint=_degraded_to_503(post_reauth), methods=["POST"]),
     Route("/admin", endpoint=_degraded_to_503(get_dashboard), methods=["GET"]),
