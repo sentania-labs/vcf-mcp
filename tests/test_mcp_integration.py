@@ -26,10 +26,12 @@ from vcf_mcp.mcp_server import (
 )
 from vcf_mcp.runtime_repository import RuntimeRepository
 from vcf_mcp.skills import load_catalog
+from vcf_mcp.upstream_control import UpstreamControl
 from vcf_mcp.vcenter import VcenterTargetClient, list_vcenter_vms
 from vcf_mcp.vcf.adapters import ADAPTERS_BY_TOOL_NAME
 from vcf_mcp.vcf.client import TargetCredentials, VcfTargetClient
 from vcf_mcp.vcf.outbound import OutboundAllowlist
+from vcf_mcp.vcf.errors import TargetConfigurationSuperseded
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +92,7 @@ async def test_pool_invalidator_settles_every_client_after_failures() -> None:
     pool = object.__new__(BackendClientPool)
     pool._lock = asyncio.Lock()
     pool._unsettled = {}
+    pool._calls = {}
     pool._clients = {
         "first": Client("first", cancel_fails=True),
         "second": Client("second", close_fails=True),
@@ -844,5 +847,115 @@ async def test_target_deletion_cancels_calls_already_draining_after_edit(
         await asyncio.gather(*calls, return_exceptions=True)
         if edit_task is not None:
             await asyncio.gather(edit_task, return_exceptions=True)
+        await pool.aclose()
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_target_deletion_cancels_concurrency_and_authentication_waiters(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeRepository(
+        tmp_path / "config.sqlite3", tmp_path / "credential_keyring.json",
+        grantable_scopes=implemented_scopes(),
+    )
+    runtime.bootstrap()
+    pack = load_backend_packs()[BackendKind.VCENTER]
+    occupied = asyncio.Event()
+    queued = asyncio.Event()
+    release_other = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    auth_waiter_started = asyncio.Event()
+    upstream_hosts: list[str] = []
+    calls: list[asyncio.Task] = []
+    deletion = None
+
+    class ObservedControl(UpstreamControl):
+        async def acquire(self) -> None:
+            if occupied.is_set():
+                queued.set()
+            await super().acquire()
+
+    control = ObservedControl(
+        backend_name="vcenter", target_id="all-targets", max_concurrency=1,
+    )
+
+    async def appliance(request: httpx.Request) -> httpx.Response:
+        upstream_hosts.append(request.url.host)
+        if request.url.path == "/api/session":
+            return httpx.Response(201, json="synthetic-session")
+        occupied.set()
+        await release_other.wait()
+        return httpx.Response(200, json=[])
+
+    def factory(target, credentials, root_ca):
+        return VcenterTargetClient(
+            target=target, credentials=credentials,
+            tools={tool.name: tool for tool in pack.tools}, caps=pack.caps,
+            upstream_control=control,
+            http_client=httpx.AsyncClient(
+                base_url=f"https://{target.fqdn}",
+                transport=httpx.MockTransport(appliance),
+            ),
+        )
+
+    async def queued_read(client):
+        try:
+            return await list_vcenter_vms(client)
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+    pool = BackendClientPool(runtime, pack, client_factory=factory)
+    try:
+        targets = []
+        for name in ("other", "retiring"):
+            targets.append(await runtime.create_target(
+                name=name, fqdn=f"{name}.example.internal",
+                username="synthetic-reader", password="synthetic-password",
+                auth_source="LOCAL", verify_ssl=False, backend=BackendKind.VCENTER,
+            ))
+        other, retiring = targets
+        calls.append(asyncio.create_task(pool.invoke(other, list_vcenter_vms, {})))
+        await asyncio.wait_for(occupied.wait(), timeout=2)
+        calls.append(asyncio.create_task(pool.invoke(retiring, queued_read, {})))
+        await asyncio.wait_for(queued.wait(), timeout=2)
+
+        async def authentication_waiter():
+            auth_waiter_started.set()
+            return await pool.invoke(retiring, list_vcenter_vms, {})
+
+        calls.append(asyncio.create_task(authentication_waiter()))
+        await asyncio.wait_for(auth_waiter_started.wait(), timeout=2)
+        assert all(not call.done() for call in calls)
+        preview = await runtime.preview_target_deletion(retiring.id)
+        result = await runtime.delete_target(
+            retiring.id, expected_confirmation_digest=preview.confirmation_digest,
+        )
+        deletion = asyncio.create_task(
+            pool.invalidate(result.change, mode=InvalidationMode.CANCEL)
+        )
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+        assert not deletion.done()
+        assert not calls[0].done()
+        with pytest.raises(TargetConfigurationSuperseded):
+            await pool.invoke(retiring, list_vcenter_vms, {})
+        release_cleanup.set()
+        invalidation = await asyncio.wait_for(deletion, timeout=2)
+        assert invalidation.cancelled_requests == 2
+        assert all(call.cancelled() for call in calls[1:])
+        assert not calls[0].done()
+        assert set(upstream_hosts) == {other.fqdn}
+        release_other.set()
+        assert await asyncio.wait_for(calls[0], timeout=2) == {"items": [], "count": 0}
+    finally:
+        release_cleanup.set()
+        release_other.set()
+        for call in calls:
+            call.cancel()
+        await asyncio.gather(*calls, return_exceptions=True)
+        if deletion is not None:
+            await asyncio.gather(deletion, return_exceptions=True)
         await pool.aclose()
         runtime.close()

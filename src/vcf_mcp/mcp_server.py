@@ -63,7 +63,11 @@ from vcf_mcp.vcenter import VcenterTargetClient
 from vcf_mcp.vcf.adapters import ADAPTERS_BY_TOOL_NAME, READ_ADAPTERS
 from vcf_mcp.vcf.client import TargetCredentials, VcfTargetClient
 from vcf_mcp.vcf.outbound import OutboundAllowlist
-from vcf_mcp.vcf.errors import AuthenticationError, ReauthenticationExhausted
+from vcf_mcp.vcf.errors import (
+    AuthenticationError,
+    ReauthenticationExhausted,
+    TargetConfigurationSuperseded,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -119,6 +123,10 @@ class BackendClientPool:
         self._factory_accepts_root_ca = bool(
             client_factory is not None and _accepts_root_ca(client_factory)
         )
+        self._calls: dict[
+            TargetId, dict[asyncio.Task[object], ConfigurationGeneration]
+        ] = {}
+        self._cancelled_before: dict[TargetId, ConfigurationGeneration] = {}
         self._clients: dict[TargetId, object] = {}
         self._unsettled: dict[TargetId, dict[object, asyncio.Task[None]]] = {}
         self._trust: dict[TargetId, tuple[bool, str | None]] = {}
@@ -142,18 +150,44 @@ class BackendClientPool:
     ) -> Mapping[str, object]:
         """Confirm one credential generation before allowing concurrent reads."""
 
-        if self._confirmed_auth_generation.get(target.id) == target.configuration_generation:
-            return await self._invoke_and_track(target, handler, arguments)
-        authentication_lock = self._authentication_locks.setdefault(
-            target.id, asyncio.Lock()
-        )
-        async with authentication_lock:
-            fresh = await self._repository.get(target.id)
-            if fresh is None or fresh.auth_locked:
-                raise PermissionError(
-                    "backend authentication is locked pending operator reset"
-                )
-            return await self._invoke_and_track(fresh, handler, arguments)
+        cutoff = self._cancelled_before.get(target.id)
+        if cutoff is not None and target.configuration_generation < cutoff:
+            raise TargetConfigurationSuperseded(
+                "the target configuration was replaced",
+                target_id=target.id,
+            )
+        task = asyncio.current_task()
+        assert task is not None
+        calls = self._calls.setdefault(target.id, {})
+        calls[task] = target.configuration_generation
+        try:
+            if self._confirmed_auth_generation.get(target.id) == target.configuration_generation:
+                return await self._invoke_and_track(target, handler, arguments)
+            authentication_lock = self._authentication_locks.setdefault(
+                target.id, asyncio.Lock()
+            )
+            async with authentication_lock:
+                fresh = await self._repository.get(target.id)
+                if fresh is None or fresh.auth_locked:
+                    raise PermissionError(
+                        "backend authentication is locked pending operator reset"
+                    )
+                return await self._invoke_and_track(fresh, handler, arguments)
+        finally:
+            calls.pop(task)
+            if not calls:
+                self._calls.pop(target.id)
+
+    @staticmethod
+    async def _cancel_calls(calls: tuple[asyncio.Task[object], ...]) -> int:
+        if asyncio.current_task() in calls:
+            raise RuntimeError("a target call cannot await its own invalidation")
+        pending = tuple(task for task in calls if not task.done())
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        return len(pending)
 
     async def _invoke_and_track(
         self,
@@ -290,6 +324,16 @@ class BackendClientPool:
         mode: InvalidationMode,
     ) -> InvalidationResult:
         self._confirmed_auth_generation.pop(change.target_id, None)
+        cancelled = 0
+        if mode is InvalidationMode.CANCEL:
+            self._cancelled_before[change.target_id] = max(
+                self._cancelled_before.get(change.target_id, change.current_generation),
+                change.current_generation,
+            )
+            cancelled = await self._cancel_calls(tuple(
+                task for task, generation in self._calls.get(change.target_id, {}).items()
+                if generation < change.current_generation
+            ))
         async with self._lock:
             client = self._clients.get(change.target_id)
             inflight = 0
@@ -302,7 +346,6 @@ class BackendClientPool:
                 for client, task in self._unsettled.get(change.target_id, {}).items()
                 if client.configuration_generation < change.current_generation
             )
-        cancelled = 0
         for client, task in unsettled:
             if mode is InvalidationMode.CANCEL:
                 cancelled += await client.cancel()
@@ -328,6 +371,10 @@ class BackendClientPool:
     async def invalidate_all(self, *, mode: InvalidationMode) -> None:
         """Discard every cached client after appliance trust changes."""
 
+        if mode is InvalidationMode.CANCEL:
+            await self._cancel_calls(tuple(
+                task for calls in self._calls.values() for task in calls
+            ))
         async with self._lock:
             for target_id, client in self._clients.items():
                 self._retire(target_id, client)
