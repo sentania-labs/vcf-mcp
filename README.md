@@ -246,4 +246,5 @@ Kubernetes.
 
 See [docs/SPEC.md](docs/SPEC.md), [docs/PROTOTYPE.md](docs/PROTOTYPE.md), and
 the accepted [decision records](docs/decisions) for the governing contracts and
-measured Operations behavior.
+measured Operations behavior. See [docs/ROADMAP.md](docs/ROADMAP.md) for
+current status, priorities, and what is deliberately deferred.
